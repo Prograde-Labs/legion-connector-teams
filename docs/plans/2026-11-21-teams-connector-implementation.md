@@ -316,12 +316,12 @@ git commit -m "feat(core): add connector-agnostic pair tool"
   "types": "dist/index.d.ts",
   "files": ["dist"],
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "rm -rf dist && tsc --project tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=22.12.0" },
   "dependencies": {
     "@microsoft/teams.apps": "2.2.1",
     "@microsoft/teams.api": "2.2.1",
@@ -366,6 +366,14 @@ git commit -m "feat(core): add connector-agnostic pair tool"
 // vitest.config.ts
 import { defineConfig } from 'vitest/config';
 export default defineConfig({ test: { include: ['src/**/*.test.ts'] } });
+```
+
+```json
+// tsconfig.build.json — production build excludes tests; typecheck still covers them
+{
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/*.test.ts"]
+}
 ```
 
 ```text
