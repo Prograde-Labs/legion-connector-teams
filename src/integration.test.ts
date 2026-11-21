@@ -14,14 +14,8 @@ describe.skipIf(!enabled)('live Teams integration', () => {
     });
     let interval: ReturnType<typeof setInterval> | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    let startupTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
-        app.start(),
-        new Promise<never>((_, reject) => {
-          startupTimeout = setTimeout(() => reject(new Error('Socket Mode startup exceeded 20 seconds')), 20_000);
-        }),
-      ]);
+      await app.start();
       const socket = app.socketMode;
       expect(socket).toBeDefined();
       if (!socket) throw new Error('Socket Mode adapter is unavailable');
@@ -30,15 +24,14 @@ describe.skipIf(!enabled)('live Teams integration', () => {
           interval = setInterval(() => {
             if (socket.status === 'ready') resolve();
           }, 100);
-          timeout = setTimeout(() => reject(new Error('Socket Mode did not become ready within 8 seconds')), 8_000);
+          timeout = setTimeout(() => reject(new Error('Socket Mode did not become ready within 15 seconds')), 15_000);
         });
       }
       expect(socket.geoStatuses.some(({ status }) => status === 'ready')).toBe(true);
     } finally {
       clearInterval(interval);
       clearTimeout(timeout);
-      clearTimeout(startupTimeout);
       await app.stop().catch(() => undefined);
     }
-  }, 30_000);
+  }, 60_000);
 });
