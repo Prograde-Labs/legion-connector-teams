@@ -47,6 +47,13 @@ if (!dryRun) {
     if (match) env[match[1]] = match[2];
   }
 }
+if (!dryRun) {
+  const invalid = ['CLIENT_ID', 'CLIENT_SECRET', 'TENANT_ID'].filter((key) => {
+    const value = env[key]?.trim();
+    return !value || /^<.*>$/.test(value);
+  });
+  if (invalid.length) throw new Error(`Missing or invalid ${invalid.join(', ')} in ${envFile}`);
+}
 const appId = env.CLIENT_ID ?? '<app-id>';
 const clientSecret = env.CLIENT_SECRET ?? '<client-secret>';
 const tenantId = env.TENANT_ID ?? '<tenant-id>';
@@ -98,7 +105,11 @@ if (!dryRun) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'operator', password: legionPassword }),
   });
-  const { token } = await login.json();
+  const loginBody = await login.json().catch(() => ({}));
+  const { token } = loginBody;
+  if (!login.ok || !token) {
+    throw new Error(`Legion login failed: ${loginBody.error ?? login.status}`);
+  }
   const response = await fetch(`${legionUrl}/api/execute?stream=false`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
