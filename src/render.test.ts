@@ -11,11 +11,15 @@ describe('render', () => {
     expect(chunkMarkdown('abc', -2).join('')).toBe('abc');
   });
 
+  it('normalizes NaN to a chunk size of one', () => {
+    expect(chunkMarkdown('abc', NaN)).toEqual(['a', 'b', 'c']);
+  });
+
   it('splits long text on a safe boundary and preserves content', () => {
     const text = `${'a'.repeat(40)}\n${'b'.repeat(40)}\n${'c'.repeat(40)}`;
     const chunks = chunkMarkdown(text, 50);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.join('').replace(/\n/g, '')).toBe(text.replace(/\n/g, ''));
+    expect(chunks.join('')).toBe(text);
   });
 
   it('builds an approval card with approve and reject actions', () => {

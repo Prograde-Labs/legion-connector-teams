@@ -22,16 +22,20 @@ function serializeArgs(args: unknown): string {
 }
 
 export function chunkMarkdown(text: string, maxChars: number): string[] {
-  const limit = Math.max(1, Math.floor(maxChars));
+  const limit = Number.isFinite(maxChars) ? Math.max(1, Math.floor(maxChars)) : 1;
   if (text.length <= limit) return [text];
   const chunks: string[] = [];
   let remaining = text;
   while (remaining.length > limit) {
-    let cut = remaining.lastIndexOf('\n', limit);
-    if (cut < limit / 2) cut = remaining.lastIndexOf(' ', limit);
-    if (cut < limit / 2) cut = limit;
+    let cut = remaining.lastIndexOf('\n', limit - 1);
+    if (cut >= limit / 2) {
+      cut += 1;
+    } else {
+      cut = remaining.lastIndexOf(' ', limit);
+      if (cut < limit / 2) cut = limit;
+    }
     chunks.push(remaining.slice(0, cut));
-    remaining = remaining.slice(cut).replace(/^\n/, '');
+    remaining = remaining.slice(cut);
   }
   if (remaining) chunks.push(remaining);
   return chunks;
