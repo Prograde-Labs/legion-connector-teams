@@ -144,7 +144,7 @@ if (!dryRun) {
       throw new Error(`set_secret failed: ${result?.error ?? result?.status ?? 'unknown'}`);
     }
   } catch (error) {
-    console.error(`Teams app ${appId} was created; credentials are in ${envFile}. Rerun or add the identity manually after storing the secret.`);
+    console.error(`Teams app ${appId} was created; credentials are in ${envFile}. Manually add the teams-bot identity and store the secret for this app ID, or delete the app in Teams before rerunning provisioning.`);
     throw error;
   }
 }
