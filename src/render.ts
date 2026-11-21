@@ -13,14 +13,23 @@ function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max)}…`;
 }
 
+function serializeArgs(args: unknown): string {
+  try {
+    return JSON.stringify(args) ?? '<unserializable args>';
+  } catch {
+    return '<unserializable args>';
+  }
+}
+
 export function chunkMarkdown(text: string, maxChars: number): string[] {
-  if (text.length <= maxChars) return [text];
+  const limit = Math.max(1, Math.floor(maxChars));
+  if (text.length <= limit) return [text];
   const chunks: string[] = [];
   let remaining = text;
-  while (remaining.length > maxChars) {
-    let cut = remaining.lastIndexOf('\n', maxChars);
-    if (cut < maxChars / 2) cut = remaining.lastIndexOf(' ', maxChars);
-    if (cut < maxChars / 2) cut = maxChars;
+  while (remaining.length > limit) {
+    let cut = remaining.lastIndexOf('\n', limit);
+    if (cut < limit / 2) cut = remaining.lastIndexOf(' ', limit);
+    if (cut < limit / 2) cut = limit;
     chunks.push(remaining.slice(0, cut));
     remaining = remaining.slice(cut).replace(/^\n/, '');
   }
@@ -38,7 +47,7 @@ export function approvalCard(approval: ApprovalRequest): IAdaptiveCard {
         type: 'FactSet',
         facts: [
           { title: 'Tool', value: approval.tool },
-          { title: 'Args', value: truncate(JSON.stringify(approval.args), 500) },
+          { title: 'Args', value: truncate(serializeArgs(approval.args), 500) },
           { title: 'Requester', value: approval.requesterId },
         ],
       },

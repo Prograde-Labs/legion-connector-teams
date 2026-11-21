@@ -6,6 +6,11 @@ describe('render', () => {
     expect(chunkMarkdown('hello', 100)).toEqual(['hello']);
   });
 
+  it('clamps nonpositive chunk sizes and preserves content', () => {
+    expect(chunkMarkdown('abc', 0).join('')).toBe('abc');
+    expect(chunkMarkdown('abc', -2).join('')).toBe('abc');
+  });
+
   it('splits long text on a safe boundary and preserves content', () => {
     const text = `${'a'.repeat(40)}\n${'b'.repeat(40)}\n${'c'.repeat(40)}`;
     const chunks = chunkMarkdown(text, 50);
@@ -33,6 +38,13 @@ describe('render', () => {
     const card = toolCard('communicate', '{"to":"alice"}');
     expect(card.type).toBe('AdaptiveCard');
     expect(JSON.stringify(card)).toContain('communicate');
+  });
+
+  it('uses a fallback for circular approval arguments', () => {
+    const args: { self?: unknown } = {};
+    args.self = args;
+    const card = approvalCard({ approvalId: 'ap-1', requesterId: 'assistant', tool: 'test', args });
+    expect(JSON.stringify(card)).toContain('<unserializable args>');
   });
 
   it('formats error and rejected results', () => {
