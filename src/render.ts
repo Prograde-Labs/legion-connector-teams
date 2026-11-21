@@ -1,0 +1,82 @@
+import type { IAdaptiveCard } from '@microsoft/teams.cards';
+
+export interface ApprovalRequest {
+  approvalId: string;
+  conversationId?: string;
+  requesterId: string;
+  tool: string;
+  args: unknown;
+  createdAt?: string;
+}
+
+function truncate(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max)}…`;
+}
+
+export function chunkMarkdown(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxChars) {
+    let cut = remaining.lastIndexOf('\n', maxChars);
+    if (cut < maxChars / 2) cut = remaining.lastIndexOf(' ', maxChars);
+    if (cut < maxChars / 2) cut = maxChars;
+    chunks.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut).replace(/^\n/, '');
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
+export function approvalCard(approval: ApprovalRequest): IAdaptiveCard {
+  return {
+    type: 'AdaptiveCard',
+    version: '1.4',
+    body: [
+      { type: 'TextBlock', text: '🔐 Approval requested', weight: 'Bolder', wrap: true },
+      {
+        type: 'FactSet',
+        facts: [
+          { title: 'Tool', value: approval.tool },
+          { title: 'Args', value: truncate(JSON.stringify(approval.args), 500) },
+          { title: 'Requester', value: approval.requesterId },
+        ],
+      },
+    ],
+    actions: [
+      {
+        type: 'Action.Execute',
+        title: 'Approve',
+        data: { action: 'approve', approvalId: approval.approvalId },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'Reject',
+        data: { action: 'reject', approvalId: approval.approvalId },
+      },
+    ],
+  } as IAdaptiveCard;
+}
+
+export function toolCard(name: string, args: string): IAdaptiveCard {
+  return {
+    type: 'AdaptiveCard',
+    version: '1.4',
+    body: [
+      { type: 'TextBlock', text: `🛠️ ${name}`, weight: 'Bolder', wrap: true },
+      { type: 'TextBlock', text: args || '(no args)', fontType: 'Monospace', wrap: true },
+    ],
+  } as IAdaptiveCard;
+}
+
+export function formatToolResult(result: {
+  status: string;
+  error?: string;
+  message?: string;
+  data?: unknown;
+}): string {
+  if (result.status === 'error') return `Error: ${result.error ?? 'unknown error'}`;
+  if (result.status === 'rejected') return result.message ?? 'Rejected.';
+  if (result.status === 'pending_approval') return 'Awaiting approval.';
+  return '';
+}
