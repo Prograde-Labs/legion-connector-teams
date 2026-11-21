@@ -1,0 +1,83 @@
+import { describe, expect, it } from 'vitest';
+import { resolveIdentity } from './identity.js';
+import { emptyState } from './state.js';
+import { resolveOptions } from './options.js';
+import type { CollectiveLike } from '@legion-collective/core';
+
+const collective = (participants: Array<Record<string, unknown>>) =>
+  ({
+    list: () => participants,
+    get: (id: string) => participants.find((p) => p.id === id),
+    findByIdentity: (connector: string, externalId: string) =>
+      participants.find((p) =>
+        (p.identities as Array<{ connector: string; externalId: string }> | undefined)?.some(
+          (i) => i.connector === connector && i.externalId === externalId,
+        ),
+      ),
+  }) as unknown as CollectiveLike;
+
+const options = (overrides = {}) => resolveOptions({ stateDir: '/tmp/x', ...overrides });
+
+describe('resolveIdentity', () => {
+  it('resolves an explicit teams identity', () => {
+    const outcome = resolveIdentity({
+      collective: collective([
+        { id: 'alice', name: 'Alice', type: 'user', tools: {}, status: 'active',
+          identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+      ]),
+      state: emptyState(), appId: 'app', aadObjectId: 'aad-1', options: options(),
+    });
+    expect(outcome).toEqual({
+      kind: 'resolved',
+      user: { participantId: 'alice', aadObjectId: 'aad-1', displayName: undefined },
+    });
+  });
+
+  it('issues a pairing code for an unknown user', () => {
+    const state = emptyState();
+    const outcome = resolveIdentity({
+      collective: collective([]), state, appId: 'app', aadObjectId: 'aad-2', options: options(),
+    });
+    expect(outcome.kind).toBe('pairing');
+    expect(Object.keys(state.pendingPairs)).toHaveLength(1);
+  });
+
+  it('returns auto-provision for that policy', () => {
+    const outcome = resolveIdentity({
+      collective: collective([]), state: emptyState(), appId: 'app', aadObjectId: 'aad-3',
+      displayName: 'New User', options: options({ unknownUserPolicy: 'auto-provision' }),
+    });
+    expect(outcome).toEqual({ kind: 'auto-provision', aadObjectId: 'aad-3', displayName: 'New User' });
+  });
+
+  it('rejects for the reject policy', () => {
+    const outcome = resolveIdentity({
+      collective: collective([]), state: emptyState(), appId: 'app', aadObjectId: 'aad-4',
+      options: options({ unknownUserPolicy: 'reject' }),
+    });
+    expect(outcome).toEqual({ kind: 'reject', aadObjectId: 'aad-4' });
+  });
+
+  it('uses the fallback participant', () => {
+    const outcome = resolveIdentity({
+      collective: collective([
+        { id: 'operator', name: 'Operator', type: 'user', tools: {}, status: 'active' },
+      ]),
+      state: emptyState(), appId: 'app', aadObjectId: 'aad-5',
+      options: options({ unknownUserPolicy: 'fallback', fallbackUserId: 'operator' }),
+    });
+    expect(outcome).toMatchObject({ kind: 'fallback', user: { participantId: 'operator' } });
+  });
+
+  it('treats a retired participant as unknown', () => {
+    const outcome = resolveIdentity({
+      collective: collective([
+        { id: 'old', name: 'Old', type: 'user', tools: {}, status: 'retired',
+          identities: [{ connector: 'teams', externalId: 'aad-6' }] },
+      ]),
+      state: emptyState(), appId: 'app', aadObjectId: 'aad-6',
+      options: options({ unknownUserPolicy: 'reject' }),
+    });
+    expect(outcome.kind).toBe('reject');
+  });
+});
