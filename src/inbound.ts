@@ -43,6 +43,10 @@ function hash6(value: string): string {
   return hash.toString(36).padStart(6, '0').slice(0, 6);
 }
 
+export function provisionedUserId(name: string, aadObjectId: string): string {
+  return `teams-${slug(name)}-${hash6(aadObjectId)}`;
+}
+
 function upsertConversation(
   state: TeamsState,
   bot: BotEntry,
@@ -68,19 +72,41 @@ async function autoProvision(
   context: TeamsContextLike,
 ): Promise<void> {
   const name = displayName ?? 'Teams user';
-  const id = `teams-${slug(name)}-${hash6(aadObjectId)}`;
+  const id = provisionedUserId(name, aadObjectId);
 
-  const created = await deps.ctx.callTool(deps.options.provisionerId, 'create_user', { id, name });
-  if (created.result.status !== 'success') {
-    await context.send(`Provisioning failed: ${created.result.error ?? created.result.status}`);
-    return;
+  if (!deps.collective.get(id)) {
+    let created;
+    try {
+      created = await deps.ctx.callTool(deps.options.provisionerId, 'create_user', { id, name });
+    } catch (error) {
+      await context.send(`Provisioning failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (created.result.status === 'pending_approval') {
+      await context.send('Provisioning approval is pending.');
+      return;
+    }
+    if (created.result.status !== 'success') {
+      await context.send(`Provisioning failed: ${created.result.error ?? created.result.status}`);
+      return;
+    }
   }
 
-  const paired = await deps.ctx.callTool(
-    deps.options.pairingParticipantId ?? deps.options.provisionerId,
-    'pair',
-    { participantId: id, connector: 'teams', externalId: aadObjectId },
-  );
+  let paired;
+  try {
+    paired = await deps.ctx.callTool(
+      deps.options.pairingParticipantId ?? deps.options.provisionerId,
+      'pair',
+      { participantId: id, connector: 'teams', externalId: aadObjectId },
+    );
+  } catch (error) {
+    await context.send(`Pairing failed: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (paired.result.status === 'pending_approval') {
+    await context.send('Pairing approval is pending.');
+    return;
+  }
   if (paired.result.status !== 'success') {
     await context.send(`Pairing failed: ${paired.result.error ?? paired.result.status}`);
     return;
@@ -94,7 +120,7 @@ export async function handleInbound(
   context: TeamsContextLike,
 ): Promise<void> {
   const activity = context.activity;
-  const aadObjectId = activity.from?.aadObjectId ?? activity.from?.id;
+  const aadObjectId = activity.from?.aadObjectId?.trim() || activity.from?.id?.trim();
   if (!aadObjectId) {
     await context.send('Unable to read your Teams identity.');
     return;
@@ -120,7 +146,7 @@ export async function handleInbound(
 
     case 'reject':
       await context.send(
-        `Not registered with Legion yet. Your Teams ID: ${outcome.aadObjectId}.`,
+        `Not registered with Legion yet. Your Teams ID: ${outcome.aadObjectId}. Ask an administrator to register you.`,
       );
       return;
 
