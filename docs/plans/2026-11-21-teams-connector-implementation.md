@@ -61,7 +61,10 @@ git -C repos/legion worktree add threads/2026-11-21-teams-connector/legion -b fe
 cd /home/chris/workspace/repos/legion && npm run build
 ```
 
-- [ ] **Step 3: Install connector dependencies**
+- [ ] **Step 3: Install connector dependencies (after Task 2)**
+
+Task 2 creates `package.json`, so run `npm install` in the connector once Task 2's
+scaffolding is committed:
 
 ```bash
 cd /home/chris/workspace/repos/legion-connector-teams && npm install
@@ -742,7 +745,7 @@ describe('bot secrets', () => {
 // src/directory.test.ts
 import { describe, expect, it } from 'vitest';
 import { buildDirectory } from './directory.js';
-import type { CollectiveLike, SecretStoreLike } from '@legion-collective/core';
+import type { CollectiveLike, SecretStoreLike } from './directory.js';
 
 const collective = (participants: Array<Record<string, unknown>>) =>
   ({ list: () => participants }) as unknown as CollectiveLike;
@@ -797,7 +800,7 @@ Expected: FAIL — modules missing.
 
 ```ts
 // src/secrets.ts
-import type { SecretStoreLike } from '@legion-collective/core';
+import type { SecretStoreLike } from './directory.js';
 
 export interface BotCredentials {
   appId: string;
@@ -837,8 +840,25 @@ export async function resolveBotCredentials(
 
 ```ts
 // src/directory.ts
-import type { CollectiveLike, SecretStoreLike } from '@legion-collective/core';
 import { resolveBotCredentials, type BotCredentials } from './secrets.js';
+
+export interface DirectoryParticipant {
+  id: string;
+  name?: string;
+  type?: string;
+  status?: string;
+  identities?: Array<{ connector: string; externalId: string }>;
+}
+
+export interface CollectiveLike {
+  list(): DirectoryParticipant[];
+  get(participantId: string): DirectoryParticipant | undefined;
+  findByIdentity(connector: string, externalId: string): DirectoryParticipant | undefined;
+}
+
+export interface SecretStoreLike {
+  getSecret(participantId: string, key: string): Promise<string | null>;
+}
 
 export interface BotEntry {
   participantId: string;
@@ -1106,7 +1126,7 @@ export function consumePendingPair(
 
 ```ts
 // src/identity.ts
-import type { CollectiveLike } from '@legion-collective/core';
+import type { CollectiveLike } from './directory.js';
 import type { ResolvedOptions } from './options.js';
 import { rememberPendingPair } from './pairing.js';
 import type { TeamsState } from './state.js';
@@ -2003,7 +2023,8 @@ Expected: FAIL — module missing.
 
 ```ts
 // src/inbound.ts
-import type { CollectiveLike, ConnectorContext } from '@legion-collective/core';
+import type { ConnectorContext } from '@legion-collective/core';
+import type { CollectiveLike } from './directory.js';
 import { MessageActivityInput, TypingActivityInput } from '@microsoft/teams.api';
 import { handleCommand } from './commands.js';
 import { runCommunicate, type TeamsStreamer } from './communicate.js';
@@ -2313,7 +2334,7 @@ Expected: FAIL — module missing.
 
 ```ts
 // src/outbound.ts
-import type { CollectiveLike } from '@legion-collective/core';
+import type { CollectiveLike } from './directory.js';
 import { MessageActivityInput } from '@microsoft/teams.api';
 import type { ResolvedOptions } from './options.js';
 import { chunkMarkdown } from './render.js';
@@ -2768,7 +2789,7 @@ export class TeamsConnector implements Connector {
       tenantId: activity.channelData?.tenant?.id,
       serviceUrl: activity.serviceUrl,
       aadObjectId,
-      displayName: participant.name,
+      displayName: activity.from?.name,
       updatedAt: new Date().toISOString(),
     };
     await this.store.save(this.state);
