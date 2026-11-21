@@ -20,6 +20,14 @@ describe('pairing codes', () => {
     expect(second).toBe(first);
   });
 
+  it('replaces a pending code with a malformed expiry', () => {
+    const state = emptyState();
+    state.pendingPairs['INVALID'] = { appId: 'app', aadObjectId: 'aad', expiresAt: 'not-a-date' };
+    const code = rememberPendingPair(state, 'app', 'aad', 600, 1000);
+    expect(code).not.toBe('INVALID');
+    expect(state.pendingPairs['INVALID']).toBeUndefined();
+  });
+
   it('consumes a code once', () => {
     const state = emptyState();
     const code = rememberPendingPair(state, 'app', 'aad', 600, 1000);
