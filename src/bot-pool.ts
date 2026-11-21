@@ -68,7 +68,7 @@ export function defaultAppFactory(
 }
 
 export class BotPool {
-  private readonly apps = new Map<string, TeamsAppLike>();
+  private readonly apps = new Map<string, { entry: BotEntry; app: TeamsAppLike }>();
   private server?: Server;
 
   constructor(
@@ -85,18 +85,20 @@ export class BotPool {
       operation = transport.kind === 'http' ? 'initialize' : 'start';
       if (transport.kind === 'http') await app.initialize();
       else await app.start();
-      this.apps.set(entry.appId, app);
+      this.apps.set(entry.appId, { entry, app });
     } catch (error) {
-      console.error(`[teams] bot ${entry.appId} ${operation} failed: ${describeError(error)}`);
-      if (app) await this.stopApp(entry.appId, app);
+      const diagnostic = describeError(error, [entry.credentials.clientSecret]);
+      console.error(`[teams] bot ${entry.appId} ${operation} failed: ${diagnostic}`);
+      if (app) await this.stopApp(entry, app);
     }
   }
 
-  private async stopApp(appId: string, app: TeamsAppLike): Promise<void> {
+  private async stopApp(entry: BotEntry, app: TeamsAppLike): Promise<void> {
     try {
       await app.stop();
     } catch (error) {
-      console.error(`[teams] bot ${appId} stop failed: ${describeError(error)}`);
+      const diagnostic = describeError(error, [entry.credentials.clientSecret]);
+      console.error(`[teams] bot ${entry.appId} stop failed: ${diagnostic}`);
     }
   }
 
@@ -136,9 +138,9 @@ export class BotPool {
       return;
     }
 
-    for (const [appId, app] of [...this.apps]) {
+    for (const [appId, { entry, app }] of [...this.apps]) {
       if (!bots.has(appId)) {
-        await this.stopApp(appId, app);
+        await this.stopApp(entry, app);
         this.apps.delete(appId);
       }
     }
@@ -149,11 +151,11 @@ export class BotPool {
   }
 
   getByAppId(appId: string): TeamsAppLike | undefined {
-    return this.apps.get(appId);
+    return this.apps.get(appId)?.app;
   }
 
   async stop(): Promise<void> {
-    for (const [appId, app] of this.apps) await this.stopApp(appId, app);
+    for (const { entry, app } of this.apps.values()) await this.stopApp(entry, app);
     this.apps.clear();
     if (this.server) {
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));

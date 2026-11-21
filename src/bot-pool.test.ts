@@ -32,6 +32,23 @@ const handlers = {
 };
 
 describe('BotPool', () => {
+  it.each(['construct', 'stop'])('redacts the bot client secret in %s diagnostics', async operation => {
+    const entry = bot('assistant', 'app');
+    entry.credentials.clientSecret = 'super-secret';
+    const fail = () => { throw new Error('clientSecret=super-secret'); };
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pool = new BotPool(resolveOptions({ transport: 'socket' }), () => {
+      if (operation === 'construct') return fail();
+      return { ...fakeApp(), stop: fail };
+    }, handlers);
+    try {
+      await pool.start(new Map([['app', entry]]));
+      await pool.stop();
+      expect(log).toHaveBeenCalledWith(`[teams] bot app ${operation} failed: Error: clientSecret=[redacted]`);
+      expect(JSON.stringify(log.mock.calls)).not.toContain('super-secret');
+    } finally { log.mockRestore(); }
+  });
+
   it('serves unauthenticated health checks on the shared listener', async () => {
     const pool = new BotPool(resolveOptions({ port: 0 }), fakeApp, handlers);
     await pool.start(new Map([['a', bot('a', 'a')]]));
