@@ -25,9 +25,20 @@ for (const name of ['env', 'legion-url', 'legion-password']) {
   if (value !== undefined) passthrough.push(`--${name}`, value);
 }
 if (process.argv.includes('--dry-run')) passthrough.push('--dry-run');
+const participants = [];
 for (const file of await readdir(dir)) {
   if (!file.endsWith('.json')) continue;
   const participant = JSON.parse(await readFile(join(dir, file), 'utf8'));
+  participants.push(participant);
+}
+if (selected) {
+  const missing = selected.filter((id) => !participants.some((participant) => participant.id === id));
+  if (missing.length) {
+    console.error(`Participants not found: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+}
+for (const participant of participants) {
   if (selected ? !selected.includes(participant.id) : participant.type !== 'agent' || participant.status === 'retired') continue;
   execFileSync('node', [
     join(import.meta.dirname, 'provision-teams-bot.mjs'),

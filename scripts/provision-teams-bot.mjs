@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // scripts/provision-teams-bot.mjs
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
@@ -8,6 +8,18 @@ const COLOR_PNG =
   'iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAABiklEQVR42u3TMQ0AAAjAMGRiAP8JBsAEHz1qYMkiqwe+ChEwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADIABRMAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwABgADAAGAAOAAcAAYAAwAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABMIAIGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAYAA4ABwABgADAAGAAMAAaASwtC9faQjfST9wAAAABJRU5ErkJggg==';
 const OUTLINE_PNG =
   'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR42u3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4tnPBf0AAAAASUVORK5CYII=';
+
+const usage = 'Usage: provision-teams-bot.mjs --participant <id> --base-url <url>';
+for (let i = 2; i < process.argv.length; i++) {
+  if (['--participant', '--base-url', '--env', '--workspace', '--legion-url', '--legion-password'].includes(process.argv[i])) {
+    const value = process.argv[i + 1];
+    if (!value || value.startsWith('--')) {
+      console.error(`${usage}\nMissing value for ${process.argv[i]}`);
+      process.exit(2);
+    }
+    i++;
+  }
+}
 
 function arg(name, fallback) {
   const index = process.argv.indexOf(`--${name}`);
@@ -17,7 +29,7 @@ function arg(name, fallback) {
 const participantId = arg('participant');
 const baseUrl = arg('base-url');
 if (!participantId || !baseUrl) {
-  console.error('Usage: provision-teams-bot.mjs --participant <id> --base-url <url>');
+  console.error(usage);
   process.exit(2);
 }
 
@@ -32,6 +44,10 @@ const participant = JSON.parse(await readFile(participantPath, 'utf8'));
 const endpoint = `${baseUrl.replace(/\/$/, '')}/teams/${participantId}/api/messages`;
 
 if (!dryRun) {
+  const zipCheck = spawnSync('zip', ['-v'], { stdio: 'ignore' });
+  if (zipCheck.error || zipCheck.status !== 0) {
+    throw new Error('zip is required; install the zip command before provisioning');
+  }
   execFileSync('teams', [
     'app', 'create',
     '--name', participant.name,
@@ -43,8 +59,14 @@ if (!dryRun) {
 const env = {};
 if (!dryRun) {
   for (const line of (await readFile(envFile, 'utf8')).split(/\r?\n/)) {
-    const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
-    if (match) env[match[1]] = match[2];
+    const match = line.match(/^\s*([A-Z0-9_]+)\s*=(.*)$/);
+    if (match) {
+      let value = match[2].trim();
+      if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+        value = value.slice(1, -1).trim();
+      }
+      env[match[1]] = value;
+    }
   }
 }
 if (!dryRun) {
@@ -92,6 +114,41 @@ if (!dryRun) {
   execFileSync('zip', ['-j', join(outDir, `${participantId}.zip`), 'manifest.json', 'color.png', 'outline.png'], { cwd: outDir, stdio: 'inherit' });
 }
 
+if (!dryRun) {
+  try {
+    const login = await fetch(`${legionUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'operator', password: legionPassword }),
+    });
+    const loginBody = (await login.json().catch(() => ({}))) ?? {};
+    const { token } = loginBody;
+    if (!login.ok || typeof token !== 'string' || !token.trim()) {
+      throw new Error(`Legion login failed: ${loginBody.error ?? login.status}`);
+    }
+    const response = await fetch(`${legionUrl}/api/execute?stream=false`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token.trim()}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'set_secret',
+        args: {
+          participantId,
+          key: `teams-bot/${appId}`,
+          secret: JSON.stringify({ appId, clientSecret, tenantId }),
+        },
+      }),
+    });
+    if (!response.ok) throw new Error(`set_secret failed: ${response.status}`);
+    const { result } = (await response.json());
+    if (result?.status !== 'success') {
+      throw new Error(`set_secret failed: ${result?.error ?? result?.status ?? 'unknown'}`);
+    }
+  } catch (error) {
+    console.error(`Teams app ${appId} was created; credentials are in ${envFile}. Rerun or add the identity manually after storing the secret.`);
+    throw error;
+  }
+}
+
 const botIdentity = { connector: 'teams-bot', externalId: appId };
 const identities = participant.identities ?? [];
 if (!identities.some((i) => i.connector === botIdentity.connector && i.externalId === botIdentity.externalId)) {
@@ -100,34 +157,13 @@ if (!identities.some((i) => i.connector === botIdentity.connector && i.externalI
 }
 
 if (!dryRun) {
-  const login = await fetch(`${legionUrl}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name: 'operator', password: legionPassword }),
-  });
-  const loginBody = await login.json().catch(() => ({}));
-  const { token } = loginBody;
-  if (!login.ok || !token) {
-    throw new Error(`Legion login failed: ${loginBody.error ?? login.status}`);
+  try {
+    const link = execFileSync('teams', ['app', 'get', appId, '--install-link'], { encoding: 'utf8' }).trim();
+    console.log(`Install: ${link}`);
+  } catch {
+    console.error('Could not retrieve install link; run this command manually:');
+    console.log(`teams app get ${appId} --install-link`);
   }
-  const response = await fetch(`${legionUrl}/api/execute?stream=false`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      tool: 'set_secret',
-      args: {
-        participantId,
-        key: `teams-bot/${appId}`,
-        secret: JSON.stringify({ appId, clientSecret, tenantId }),
-      },
-    }),
-  });
-  if (!response.ok) throw new Error(`set_secret failed: ${response.status}`);
-  const { result } = (await response.json());
-  if (result?.status !== 'success') {
-    throw new Error(`set_secret failed: ${result?.error ?? result?.status ?? 'unknown'}`);
-  }
-  console.log(`Install: teams app get ${appId} --install-link`);
 }
 
 console.log(JSON.stringify({ participantId, appId, endpoint, outDir }, null, 2));
