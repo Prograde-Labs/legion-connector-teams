@@ -11,7 +11,7 @@ import type { StateStore, TeamsState } from './state.js';
 
 export interface TeamsActivity {
   from?: { id?: string; name?: string; aadObjectId?: string };
-  conversation?: { id?: string };
+  conversation?: { id?: string; conversationType?: string };
   channelData?: { tenant?: { id?: string } };
   serviceUrl?: string;
   text?: string;

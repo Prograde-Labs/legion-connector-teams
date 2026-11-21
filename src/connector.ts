@@ -3,6 +3,7 @@ import type { Connector, ConnectorContext, ConnectorRuntimeDeps } from '@legion-
 import { handleApprovalAction } from './approvals.js';
 import { BotPool, defaultAppFactory, type TeamsAppFactory } from './bot-pool.js';
 import { buildDirectory, type BotEntry } from './directory.js';
+import { describeError } from './errors.js';
 import { handleInbound, type TeamsContextLike } from './inbound.js';
 import { deliverMessage } from './outbound.js';
 import { resolveOptions, type ResolvedOptions, type TeamsConnectorOptions } from './options.js';
@@ -15,6 +16,8 @@ export class TeamsConnector implements Connector {
   private state?: TeamsState;
   private pool?: BotPool;
   private rescan?: NodeJS.Timeout;
+  private stopping = false;
+  private inFlight?: Promise<void>;
   private readonly options: ResolvedOptions;
 
   constructor(
@@ -33,6 +36,7 @@ export class TeamsConnector implements Connector {
       throw new Error('unknownUserPolicy "fallback" requires fallbackUserId');
     }
 
+    this.stopping = false;
     this.ctx = ctx;
     this.store = new StateStore(this.options.stateDir);
     this.state = await this.store.load();
@@ -53,10 +57,16 @@ export class TeamsConnector implements Connector {
   }
 
   private async rebuild(): Promise<void> {
-    if (!this.deps.secrets) return;
-    const directory = await buildDirectory(this.deps.collective, this.deps.secrets);
-    for (const warning of directory.warnings) console.warn(`[teams] ${warning}`);
-    await this.pool?.reconcile(directory.bots);
+    if (this.stopping || this.inFlight || !this.deps.secrets) return;
+    this.inFlight = buildDirectory(this.deps.collective, this.deps.secrets)
+      .then(async (directory) => {
+        if (this.stopping) return;
+        for (const warning of directory.warnings) console.warn(`[teams] ${warning}`);
+        await this.pool?.reconcile(directory.bots);
+      })
+      .catch((error) => console.error(`[teams] rebuild failed: ${describeError(error)}`))
+      .finally(() => { this.inFlight = undefined; });
+    await this.inFlight;
   }
 
   private async onMessage(bot: BotEntry, context: TeamsContextLike): Promise<void> {
@@ -77,12 +87,13 @@ export class TeamsConnector implements Connector {
   private async onInstall(bot: BotEntry, context: TeamsContextLike): Promise<void> {
     if (!this.state || !this.store) return;
     const activity = context.activity;
+    if (activity.conversation?.conversationType !== 'personal' || !activity.conversation.id?.trim()) return;
     const aadObjectId = activity.from?.aadObjectId ?? activity.from?.id;
     if (!aadObjectId) return;
     const participant = this.deps.collective.findByIdentity('teams', aadObjectId);
     if (!participant) return;
     this.state.conversations[`${bot.appId}:${participant.id}`] = {
-      conversationId: activity.conversation?.id ?? '',
+      conversationId: activity.conversation.id,
       tenantId: activity.channelData?.tenant?.id,
       serviceUrl: activity.serviceUrl,
       aadObjectId,
@@ -146,7 +157,10 @@ export class TeamsConnector implements Connector {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     if (this.rescan) clearInterval(this.rescan);
+    // Rebuild handles and logs failures before this promise settles.
+    await this.inFlight;
     await this.pool?.stop();
     this.ctx = undefined;
   }

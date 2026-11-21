@@ -2,10 +2,11 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TeamsConnector } from './connector.js';
 import type { CollectiveLike, ConnectorRuntimeDeps } from '@legion-collective/core';
-import type { TeamsAppLike } from './bot-pool.js';
+import type { TeamsAppLike, TeamsAppFactory } from './bot-pool.js';
+import { StateStore } from './state.js';
 
 function setup() {
   const sent: Array<{ conversationId: string; activity: unknown }> = [];
@@ -43,6 +44,46 @@ function setup() {
 }
 
 describe('TeamsConnector', () => {
+  it('does not reconcile a paused discovery after stop begins', async () => {
+    const { app, deps } = setup();
+    const factory = vi.fn(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-rescan-'));
+    const connector = new TeamsConnector({ stateDir: dir, port: 0 }, deps, factory);
+    await connector.start({} as never);
+    let release!: (value: string) => void;
+    const secret = new Promise<string>(resolve => { release = resolve; });
+    const discover = vi.spyOn(deps.secrets!, 'getSecret').mockReturnValue(secret);
+    const scan = connector['rebuild']();
+    const overlap = connector['rebuild']();
+    const stopped = connector.stop();
+    release('{"appId":"app","clientSecret":"s","tenantId":"t"}');
+    await Promise.all([scan, overlap, stopped]);
+    expect(discover).toHaveBeenCalledTimes(1);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it('only saves personal conversations with a usable id', async () => {
+    const { app, deps } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-install-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    await connector.start({} as never);
+    const [entry, handlers] = factory.mock.calls[0];
+    const context = (conversationType: string, id?: string) => ({
+      activity: { from: { aadObjectId: 'aad-1' }, conversation: { conversationType, id } },
+    } as never);
+    try {
+      const record = async () => (await new StateStore(dir).load()).conversations['app:alice'];
+      await handlers.onInstall(entry, context('personal', 'personal-id'));
+      const personal = await record();
+      expect(personal.conversationId).toBe('personal-id');
+      await handlers.onConversationUpdate(entry, context('groupChat', 'group-id'));
+      expect(await record()).toEqual(personal);
+      await handlers.onInstall(entry, context('personal'));
+      expect(await record()).toEqual(personal);
+    } finally { await connector.stop(); }
+  });
+
   it('starts the pool and delivers outbound messages', async () => {
     const s = setup();
     const dir = await mkdtemp(join(tmpdir(), 'teams-conn-'));

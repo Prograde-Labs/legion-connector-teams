@@ -3,6 +3,7 @@ import type { CollectiveLike } from './directory.js';
 import { MessageActivityInput } from '@microsoft/teams.api';
 import type { ResolvedOptions } from './options.js';
 import { chunkMarkdown } from './render.js';
+import { describeError } from './errors.js';
 import type { StateStore, TeamsState } from './state.js';
 
 export interface OutboundApp {
@@ -20,11 +21,6 @@ export interface OutboundDeps {
   stateStore: StateStore;
   apps: { getByAppId(appId: string): OutboundApp | undefined };
   options: ResolvedOptions;
-}
-
-function describeError(error: unknown): string {
-  const description = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return description.replace(/Bearer\s+[^\s,;"']+/gi, 'Bearer [redacted]');
 }
 
 export async function deliverMessage(

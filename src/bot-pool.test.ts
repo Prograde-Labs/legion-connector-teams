@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { BotPool, type TeamsAppLike } from './bot-pool.js';
 import { resolveOptions } from './options.js';
 import type { BotEntry } from './directory.js';
+import type { AddressInfo } from 'node:net';
 
 function fakeApp(): TeamsAppLike & { sent: unknown[]; stopped: number; initialized: number } {
   return {
@@ -31,6 +32,51 @@ const handlers = {
 };
 
 describe('BotPool', () => {
+  it('serves unauthenticated health checks on the shared listener', async () => {
+    const pool = new BotPool(resolveOptions({ port: 0 }), fakeApp, handlers);
+    await pool.start(new Map([['a', bot('a', 'a')]]));
+    try {
+      const { port } = pool['server']!.address() as AddressInfo;
+      expect((await fetch(`http://127.0.0.1:${port}/health`)).status).toBe(200);
+    } finally { await pool.stop(); }
+  });
+
+  it.each(['http', 'socket'] as const)('isolates %s bot lifecycle failures and redacts errors', async (transport) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fail = () => { throw new Error('Bearer sentinel-token'); };
+    const healthy = fakeApp();
+    const pool = new BotPool(resolveOptions({ port: 0, transport }), ({ appId }) => {
+      if (appId === 'factory') return fail();
+      if (appId === 'startup') return { ...fakeApp(), initialize: fail, start: fail };
+      if (appId === 'shutdown') return { ...fakeApp(), stop: fail };
+      return healthy;
+    }, handlers);
+    try {
+      await pool.start(new Map(['factory', 'startup', 'shutdown', 'healthy'].map(id => [id, bot(id, id)])));
+      expect(healthy.initialized).toBe(1);
+      expect(pool.getByAppId('startup')).toBeUndefined();
+      await pool.stop();
+      expect(healthy.stopped).toBe(1);
+      expect(pool.getByAppId('shutdown')).toBeUndefined();
+      expect(log).toHaveBeenCalledTimes(3);
+      expect(JSON.stringify(log.mock.calls)).not.toContain('sentinel-token');
+    } finally { log.mockRestore(); }
+  });
+
+  it('rejects an occupied port and stops initialized bots', async () => {
+    const owner = new BotPool(resolveOptions({ port: 0 }), fakeApp, handlers);
+    await owner.start(new Map());
+    try {
+      const { port } = owner['server']!.address() as AddressInfo;
+      const app = fakeApp();
+      const pool = new BotPool(resolveOptions({ port }), () => app, handlers);
+      await expect(pool.start(new Map([['a', bot('a', 'a')]]))).rejects.toMatchObject({ code: 'EADDRINUSE' });
+      expect(app.initialized).toBe(1);
+      expect(app.stopped).toBe(1);
+      expect(pool.getByAppId('a')).toBeUndefined();
+    } finally { await owner.stop(); }
+  });
+
   it('starts an app per bot and stops them', async () => {
     const apps: Array<ReturnType<typeof fakeApp>> = [];
     const pool = new BotPool(

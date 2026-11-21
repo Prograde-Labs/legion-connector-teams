@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import express from 'express';
 import { App, ExpressAdapter } from '@microsoft/teams.apps';
 import type { BotEntry } from './directory.js';
+import { describeError } from './errors.js';
 import type { ResolvedOptions } from './options.js';
 
 export interface TeamsAppLike {
@@ -76,27 +77,55 @@ export class BotPool {
     private readonly handlers: AppHandlers,
   ) {}
 
+  private async add(entry: BotEntry, transport: TransportContext): Promise<void> {
+    let operation = 'construct';
+    let app: TeamsAppLike | undefined;
+    try {
+      app = this.factory(entry, this.handlers, transport);
+      operation = transport.kind === 'http' ? 'initialize' : 'start';
+      if (transport.kind === 'http') await app.initialize();
+      else await app.start();
+      this.apps.set(entry.appId, app);
+    } catch (error) {
+      console.error(`[teams] bot ${entry.appId} ${operation} failed: ${describeError(error)}`);
+      if (app) await this.stopApp(entry.appId, app);
+    }
+  }
+
+  private async stopApp(appId: string, app: TeamsAppLike): Promise<void> {
+    try {
+      await app.stop();
+    } catch (error) {
+      console.error(`[teams] bot ${appId} stop failed: ${describeError(error)}`);
+    }
+  }
+
   async start(bots: Map<string, BotEntry>): Promise<void> {
     if (this.options.transport === 'http') {
       const expressApp = express();
+      expressApp.get('/health', (_req, res) => res.sendStatus(200));
       const server = createServer(expressApp);
       for (const entry of bots.values()) {
-        const app = this.factory(entry, this.handlers, { kind: 'http', expressApp });
-        await app.initialize();
-        this.apps.set(entry.appId, app);
+        await this.add(entry, { kind: 'http', expressApp });
       }
-      await new Promise<void>((resolve) => server.listen(this.options.port, '0.0.0.0', resolve));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.once('error', reject);
+          server.listen(this.options.port, '0.0.0.0', () => {
+            server.off('error', reject);
+            resolve();
+          });
+        });
+      } catch (error) {
+        await this.stop();
+        throw error;
+      }
       this.server = server;
       return;
     }
 
     for (const entry of bots.values()) {
-      const app = this.factory(entry, this.handlers, {
-        kind: 'socket',
-        geos: this.options.socketGeos,
-      });
-      await app.start();
-      this.apps.set(entry.appId, app);
+      await this.add(entry, { kind: 'socket', geos: this.options.socketGeos });
     }
   }
 
@@ -109,18 +138,13 @@ export class BotPool {
 
     for (const [appId, app] of [...this.apps]) {
       if (!bots.has(appId)) {
-        await app.stop();
+        await this.stopApp(appId, app);
         this.apps.delete(appId);
       }
     }
     for (const [appId, entry] of bots) {
       if (this.apps.has(appId)) continue;
-      const app = this.factory(entry, this.handlers, {
-        kind: 'socket',
-        geos: this.options.socketGeos,
-      });
-      await app.start();
-      this.apps.set(appId, app);
+      await this.add(entry, { kind: 'socket', geos: this.options.socketGeos });
     }
   }
 
@@ -129,7 +153,7 @@ export class BotPool {
   }
 
   async stop(): Promise<void> {
-    for (const app of this.apps.values()) await app.stop();
+    for (const [appId, app] of this.apps) await this.stopApp(appId, app);
     this.apps.clear();
     if (this.server) {
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));
