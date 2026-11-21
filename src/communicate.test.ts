@@ -98,4 +98,32 @@ describe('runCommunicate', () => {
     });
     expect(stream.updates).toContain('Calling search…');
   });
+
+  it.each(['status', 'cards'] as const)('hides tool calls at minimal detail with %s display', async (toolDisplay) => {
+    const stream = fakeStream();
+    const send = vi.fn(async () => undefined);
+    await runCommunicate({
+      ctx: fakeCtx([
+        { type: 'tool_call_start', index: 0, id: 't1', name: 'search' },
+        { type: 'stream:done', result: { status: 'success', data: {} } },
+      ]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi',
+      options: options({ maxDetail: 'minimal', toolDisplay }), stream, send,
+    });
+    expect(stream.updates).toEqual([]);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('sends only one error for a stream error followed by an error result', async () => {
+    const send = vi.fn(async () => undefined);
+    await runCommunicate({
+      ctx: fakeCtx([
+        { type: 'stream:error', error: 'failed' },
+        { type: 'stream:done', result: { status: 'error', error: 'failed' } },
+      ]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi',
+      options: options(), stream: fakeStream(), send,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
 });

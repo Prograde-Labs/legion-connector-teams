@@ -49,6 +49,7 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
         buffer = chunk.content;
         break;
       case 'tool_call_start':
+        if (deps.options.maxDetail === 'minimal') break;
         if (deps.options.toolDisplay === 'status') {
           deps.stream?.update(`Calling ${chunk.name}…`);
         } else if (deps.options.toolDisplay === 'cards') {
@@ -87,7 +88,7 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
     for (const approval of data?.approvalRequests ?? []) {
       await deps.send(new MessageActivityInput().addCard('adaptive', approvalCard(approval)));
     }
-  } else if (final?.status === 'error') {
+  } else if (final?.status === 'error' && !sawError) {
     await deps.send(new MessageActivityInput(`Error: ${final.error ?? 'unknown error'}`));
   } else if (final?.status === 'rejected') {
     await deps.send(new MessageActivityInput(final.message ?? 'Rejected.'));
