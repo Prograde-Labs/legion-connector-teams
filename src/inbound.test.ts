@@ -165,6 +165,24 @@ describe('handleInbound', () => {
     expect(send.mock.calls[0][0]).toMatch(/Welcome/);
   });
 
+  it.each([
+    { type: 'user', identities: [{ connector: 'teams', externalId: 'someone-else' }] },
+    { type: 'agent', identities: [] },
+  ])('rejects an existing conflicting participant: $type', async (participant) => {
+    const s = setup([{ id: 'teams-alice-1j42jy', name: 'Alice', status: 'active', ...participant }]);
+    const send = vi.fn(async (_value: unknown) => undefined);
+    await handleInbound(
+      { ...s, stateStore: { save: s.save } as never,
+        options: resolveOptions({ stateDir: '/tmp/x', unknownUserPolicy: 'auto-provision' }) },
+      { activity: activity('hello', 'aad-7'), send },
+    );
+    expect(s.callTool).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(
+      'Participant teams-alice-1j42jy is already in use; ask an administrator to pair you.',
+    );
+    expect(s.ctx.registry.setActive).not.toHaveBeenCalled();
+  });
+
   it.each(['create_user', 'pair'])('reports a rejected %s call without resolving the sender', async (stage) => {
     const s = setup();
     if (stage === 'pair') s.callTool.mockResolvedValueOnce({ result: { status: 'success' }, conversationId: 'c' });

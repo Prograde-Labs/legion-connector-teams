@@ -73,8 +73,16 @@ async function autoProvision(
 ): Promise<void> {
   const name = displayName ?? 'Teams user';
   const id = provisionedUserId(name, aadObjectId);
+  const existing = deps.collective.get(id);
 
-  if (!deps.collective.get(id)) {
+  if (existing && (existing.type !== 'user' || existing.identities?.some(
+    (identity) => identity.connector === 'teams' && identity.externalId !== aadObjectId,
+  ))) {
+    await context.send(`Participant ${id} is already in use; ask an administrator to pair you.`);
+    return;
+  }
+
+  if (!existing) {
     let created;
     try {
       created = await deps.ctx.callTool(deps.options.provisionerId, 'create_user', { id, name });
