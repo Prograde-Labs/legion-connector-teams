@@ -14,6 +14,16 @@ describe('bot secrets', () => {
     expect(parseBotSecret('{"appId":"a"}')).toBeNull();
   });
 
+  it.each(['appId', 'clientSecret', 'tenantId'] as const)(
+    'rejects empty and whitespace-only %s',
+    (field) => {
+      for (const blank of ['', ' \t\n']) {
+        const credentials = { appId: 'a', clientSecret: 's', tenantId: 't', [field]: blank };
+        expect(parseBotSecret(JSON.stringify(credentials))).toBeNull();
+      }
+    },
+  );
+
   it('reads the participant-scoped secret key', async () => {
     const secrets = {
       getSecret: async (participantId: string, key: string) =>

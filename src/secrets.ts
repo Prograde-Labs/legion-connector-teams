@@ -14,7 +14,10 @@ export function parseBotSecret(raw: string | null): BotCredentials | null {
     if (
       typeof value.appId !== 'string' ||
       typeof value.clientSecret !== 'string' ||
-      typeof value.tenantId !== 'string'
+      typeof value.tenantId !== 'string' ||
+      value.appId.trim() === '' ||
+      value.clientSecret.trim() === '' ||
+      value.tenantId.trim() === ''
     ) {
       return null;
     }
