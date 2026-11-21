@@ -1,6 +1,6 @@
 // src/commands.ts
 import type { ConnectorContext } from '@legion-collective/core';
-import { consumePendingPair } from './pairing.js';
+import { validatePendingPair } from './pairing.js';
 import type { ResolvedOptions } from './options.js';
 import type { TeamsState } from './state.js';
 
@@ -32,7 +32,7 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
         await deps.send('Usage: /pair <code> <participant-id>');
         return true;
       }
-      const pending = consumePendingPair(deps.state, code);
+      const pending = validatePendingPair(deps.state, code);
       if (!pending || pending.appId !== deps.appId || pending.aadObjectId !== deps.aadObjectId) {
         await deps.send('Pairing code is invalid or expired.');
         return true;
@@ -44,6 +44,7 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
         externalId: deps.aadObjectId,
       });
       if (result.status === 'success') {
+        delete deps.state.pendingPairs[code.toUpperCase()];
         await deps.send(`Paired ${target} with your Teams identity.`);
       } else if (result.status === 'pending_approval') {
         await deps.send('Pairing is awaiting approval.');

@@ -46,6 +46,36 @@ describe('commands', () => {
       externalId: 'aad-1',
     });
     expect(sent[0]).toMatch(/Paired bob/);
+    expect(d.state.pendingPairs[code]).toBeUndefined();
+  });
+
+  it.each([
+    ['error', 'not authorized', /not authorized/],
+    ['pending_approval', undefined, /awaiting approval/],
+  ])('retains the code on %s', async (status, error, message) => {
+    const { deps: d, sent } = deps('/pair');
+    const code = rememberPendingPair(d.state, 'app', 'aad-1', 600);
+    const callTool = vi.fn(async () => ({ result: { status, error }, conversationId: 'c' }));
+    await handleCommand({ ...d, text: `/pair ${code.toLowerCase()} bob`, ctx: { callTool } as unknown as ConnectorContext });
+    expect(callTool).toHaveBeenCalledOnce();
+    expect(d.state.pendingPairs[code]).toBeDefined();
+    expect(sent[0]).toMatch(message);
+  });
+
+  it.each(['2000-01-01T00:00:00.000Z', 'invalid'])('removes an invalid expiry %s without calling the tool', async (expiresAt) => {
+    const { deps: d, callTool } = deps('/pair ABC234 bob');
+    d.state.pendingPairs['ABC234'] = { appId: 'app', aadObjectId: 'aad-1', expiresAt };
+    await handleCommand(d);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(d.state.pendingPairs['ABC234']).toBeUndefined();
+  });
+
+  it('does not consume a code belonging to another identity', async () => {
+    const { deps: d, callTool } = deps('/pair');
+    const code = rememberPendingPair(d.state, 'app', 'other', 600);
+    await handleCommand({ ...d, text: `/pair ${code} bob` });
+    expect(callTool).not.toHaveBeenCalled();
+    expect(d.state.pendingPairs[code]).toBeDefined();
   });
 
   it('uses pairingParticipantId when configured', async () => {

@@ -37,7 +37,7 @@ export function rememberPendingPair(
   return code;
 }
 
-export function consumePendingPair(
+export function validatePendingPair(
   state: TeamsState,
   code: string,
   now = Date.now(),
@@ -45,7 +45,20 @@ export function consumePendingPair(
   const key = code.toUpperCase();
   const pair = state.pendingPairs[key];
   if (!pair) return null;
-  delete state.pendingPairs[key];
   const expiry = Date.parse(pair.expiresAt);
-  return Number.isNaN(expiry) || expiry <= now ? null : pair;
+  if (Number.isNaN(expiry) || expiry <= now) {
+    delete state.pendingPairs[key];
+    return null;
+  }
+  return pair;
+}
+
+export function consumePendingPair(
+  state: TeamsState,
+  code: string,
+  now = Date.now(),
+): PendingPair | null {
+  const pair = validatePendingPair(state, code, now);
+  if (pair) delete state.pendingPairs[code.toUpperCase()];
+  return pair;
 }

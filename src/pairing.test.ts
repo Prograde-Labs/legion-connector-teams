@@ -1,8 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { consumePendingPair, generatePairCode, rememberPendingPair } from './pairing.js';
+import { consumePendingPair, generatePairCode, rememberPendingPair, validatePendingPair } from './pairing.js';
 import { emptyState } from './state.js';
 
 describe('pairing codes', () => {
+  it('validates a code without consuming it, case-insensitively', () => {
+    const state = emptyState();
+    const code = rememberPendingPair(state, 'app', 'aad', 600, 1000);
+    expect(validatePendingPair(state, code.toLowerCase(), 2000)).toEqual(state.pendingPairs[code]);
+    expect(state.pendingPairs[code]).toBeDefined();
+  });
+
+  it.each(['invalid', '1970-01-01T00:00:01.000Z'])('removes invalid expiry %s during validation', (expiresAt) => {
+    const state = emptyState();
+    state.pendingPairs['ABC234'] = { appId: 'app', aadObjectId: 'aad', expiresAt };
+    expect(validatePendingPair(state, 'abc234', 2000)).toBeNull();
+    expect(state.pendingPairs['ABC234']).toBeUndefined();
+  });
+
   it('generates six unambiguous characters', () => {
     for (let i = 0; i < 20; i++) {
       expect(generatePairCode(() => 0)).toMatch(/^[2-9A-HJ-NP-Z]{6}$/);
