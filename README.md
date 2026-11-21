@@ -94,6 +94,6 @@ Install each generated app manually in Teams using the printed install link or p
 npm test
 ```
 
-A live Socket Mode integration test is planned as opt-in with `LEGION_TEAMS_INTEGRATION=1` and `TEAMS_CLIENT_ID`, `TEAMS_CLIENT_SECRET`, and `TEAMS_TENANT_ID`; it is not present in this checkout yet. Do not put those credentials in source control.
+A live Socket Mode integration test is available as opt-in with `LEGION_TEAMS_INTEGRATION=1` and `TEAMS_CLIENT_ID`, `TEAMS_CLIENT_SECRET`, and `TEAMS_TENANT_ID`. Do not put those credentials in source control.
 
 See [deployment](docs/deploy.md) for container, proxy, and operational notes.
