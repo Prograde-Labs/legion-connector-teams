@@ -60,6 +60,7 @@ per participant** (Telegram v2 parity).
 | Credentials | Legion SecretStore, key `teams-bot/<appId>` | Same pattern as Telegram v2; no secrets in participant files or git |
 | State | Connector-owned JSON under `stateDir` | Fixes Telegram v2's restart amnesia; no core changes |
 | Approvals | Adaptive Cards with `Action.Execute` | Native Teams actions; routed to `card.action.*` handlers |
+| Pairing | Core connector-agnostic `pair` tool, AuthEngine policy | Any participant/agent/service granted `pair` can pair; no operator-only gate |
 | Tool display | `off` / `status` / `cards` | Configurable use of native Teams streaming and cards |
 
 ## 3. Architecture
@@ -75,15 +76,15 @@ TeamsConnector
    ├── Directory       collective.list() → bots (teams-bot identities + secrets)
    ├── BotPool         start/stop/reconcile App instances
    ├── Identity        resolve aadObjectId → Legion user (policies)
-   ├── Pairing         codes + persisted mappings
+   ├── Pairing         codes + pending state; calls the core `pair` tool
    ├── Inbound         commands, typing, communicate
    ├── Communicate     streamTool chunk mapping
    ├── Outbound        deliver() → app.send
    ├── Approvals       card render + action → approval_response
    ├── Render          markdown, chunking, cards
-   └── State           conversations, pairings, pending codes
+   └── State           conversations, pending codes
    ▼
-Legion core: ConnectorContext.callTool / streamTool / registry
+Legion core: ConnectorContext.callTool / streamTool / registry; `pair` tool
 ```
 
 The connector is loaded in-process by Legion. `start(ctx)` builds the directory and
@@ -106,8 +107,8 @@ src/
   transport.ts      HTTP server or Socket Mode
   inbound.ts        message / install.add / conversationUpdate handlers
   identity.ts       aadObjectId → participant resolution
-  pairing.ts        code generation, TTL, persistence
-  auto-provision.ts create_user via callTool
+  pairing.ts        code generation, TTL, pending codes
+  auto-provision.ts create_user + pair via callTool
   commands.ts       /new, /pair, /whoami, /help
   communicate.ts    streamTool consumption and chunk mapping
   outbound.ts       deliver()
@@ -121,6 +122,43 @@ src/
 Runtime dependencies: `@microsoft/teams.apps`, `@microsoft/teams.api`,
 `@microsoft/teams.cards`, `express`. Legion packages are type-only devDependencies
 (same as Telegram v2). Node 22 (Legion's Docker image is `node:22-slim`).
+
+### 4.1 Core change: connector-agnostic `pair` tool
+
+Legion core gains one small tool, usable by every connector:
+
+```ts
+{
+  name: 'pair',
+  description: 'Merge an external identity into a participant.',
+  parameters: {
+    type: 'object',
+    properties: {
+      participantId: { type: 'string' },
+      connector:     { type: 'string' },   // e.g. 'teams', 'telegram'
+      externalId:    { type: 'string' },   // platform identity
+    },
+    required: ['participantId', 'connector', 'externalId'],
+  },
+}
+```
+
+Behavior:
+
+- require a non-empty `connector` and `externalId`
+- require the target participant to exist
+- merge the identity into the participant's `identities` array, deduping on
+  `(connector, externalId)`; never replace unrelated identities
+- persist via `collective.update(participantId, { identities })`
+- return `{ status: 'success', data: { participantId, connector, externalId } }`
+
+Authorization is entirely the AuthEngine's: the caller must have `pair` in its tools
+map (`auto`, `requires_approval`, or scoped). Add `pair` to the default operator's
+management tools so operators can pair out of the box. The tool knows nothing about
+Teams; the connector validates its own pairing code before calling it.
+
+This is a Legion core change plus tests; the connector depends on it. The
+implementation plan covers both repositories.
 
 ## 5. Configuration
 
@@ -154,7 +192,8 @@ export interface TeamsConnectorOptions {
   socketGeos?: string[];                          // default ['amer','emea','apac']
   unknownUserPolicy?: 'pairing' | 'reject' | 'auto-provision' | 'fallback';
   fallbackUserId?: string;                        // required for 'fallback'
-  provisionerId?: string;                         // default 'operator'
+  provisionerId?: string;                         // default 'operator'; needs create_user
+  pairingParticipantId?: string;                  // default: the sender; needs pair
   pairingTtlSeconds?: number;                     // default 600
   maxDetail?: 'minimal' | 'standard' | 'full';    // default 'standard'
   toolDisplay?: 'off' | 'status' | 'cards';       // default 'status'
@@ -280,12 +319,12 @@ app.on('card.action.reject',  ctx => onApprovalAction(bot, ctx, 'reject'));
 
 For `activity.from.aadObjectId` (or `from.id` fallback):
 
-1. `collective.findByIdentity('teams', aadObjectId)`
-2. connector `pairings[appId:aadObjectId]`
-3. `fallbackUserId` when `unknownUserPolicy === 'fallback'`
-4. policy:
+1. `collective.findByIdentity('teams', aadObjectId)` — covers explicit identities and
+   anyone paired through the core `pair` tool
+2. `fallbackUserId` when `unknownUserPolicy === 'fallback'`
+3. policy:
    - `pairing` (default): reply with a code and the user's Teams ID
-   - `auto-provision`: call `create_user` as `provisionerId`, then store the mapping
+   - `auto-provision`: `create_user` then `pair` (section 8.5)
    - `reject`: reply with the Teams ID and a registration hint
 
 A retired participant is treated as unknown. Resolution is fail-closed: no tool call
@@ -303,15 +342,17 @@ happens until a participant is resolved.
 ### 8.3 Commands
 
 - `/new` — clear `legionConversations[appId:participantId]`; reply "Started a new conversation."
-- `/pair <code> <participantId>` — operator-only. Validate the pending code (TTL,
-  single use), require an existing `user` participant, store
-  `pairings[appId:aadObjectId]`, delete the pending code, reply with confirmation.
+- `/pair <code> <participantId>` — validate the pending code (TTL, single use), then
+  `ctx.callTool(pairingParticipantId ?? senderId, 'pair', { participantId, connector: 'teams', externalId: aadObjectId })`.
+  Delete the pending code on success; reply with confirmation. Surface auth errors
+  and `pending_approval` results to the user.
 - `/whoami` — reply with participant ID, Teams ID, bot appId, Legion conversation ID.
 - `/help` — list commands.
 
-An operator is `collective.get(participantId)?.operator === true`. The operator must
-be reachable in Teams to use `/pair`; alternatively, add the user's `teams` identity
-to their participant file directly.
+Pairing is authorized by the AuthEngine through the core `pair` tool: any participant
+granted `pair` can do it. By default the connector calls the tool as the sender (the
+human who typed `/pair`). Set `pairingParticipantId` to route pairing through an agent
+or service instead; that participant's `pair` policy is then the one enforced.
 
 ### 8.4 Pairing codes
 
@@ -323,21 +364,23 @@ to their participant file directly.
 
 The unknown-user reply:
 
-> Not registered with Legion yet. Ask the operator to run
+> Not registered with Legion yet. Ask someone with the `pair` tool to run
 > `/pair <code> <participant-id>`. Your Teams ID: `<aadObjectId>`.
 
 ### 8.5 Auto-provision
 
-`ctx.callTool(provisionerId, 'create_user', { id, name })` where:
+Two tool calls as the configured participants:
 
-- `id = teams-<slug(displayName)>-<hash6(aadObjectId)>`
-- `name = activity.from.name`
+1. `ctx.callTool(provisionerId, 'create_user', { id, name })` where
+   `id = teams-<slug(displayName)>-<hash6(aadObjectId)>` and
+   `name = activity.from.name`
+2. `ctx.callTool(pairingParticipantId ?? provisionerId, 'pair', { participantId: id, connector: 'teams', externalId: aadObjectId })`
 
-`create_user` does not accept identities, so the connector stores the
-`(appId, aadObjectId) → participantId` mapping in its own state. If the call returns
-`pending_approval`, tell the user approval is pending. If it errors, reply with the
-error and leave the user unresolved. The provisioner must have `create_user` as
-`auto`; document this.
+`create_user` does not accept identities; `pair` adds the Teams identity, so
+subsequent resolution works through `collective.findByIdentity`. If either call returns
+`pending_approval`, tell the user approval is pending. If either errors, reply with the
+error and leave the user unresolved. The provisioner needs `create_user` as `auto`; the
+pairing participant needs a `pair` policy that allows the call.
 
 ## 9. Communicate and streaming
 
@@ -462,9 +505,6 @@ mode 0600, atomic write (temp file + rename), no secrets:
       "updatedAt": "…"
     }
   },
-  "pairings": {
-    "<appId>:<aadObjectId>": { "participantId": "…", "createdAt": "…" }
-  },
   "pendingPairs": {
     "<code>": { "appId": "…", "aadObjectId": "…", "expiresAt": "…" }
   },
@@ -473,6 +513,9 @@ mode 0600, atomic write (temp file + rename), no secrets:
   }
 }
 ```
+
+Pairings themselves live in participant files (written by the core `pair` tool); the
+connector state only holds pending codes and conversation references.
 
 A corrupt file is renamed to `state.json.bak-<timestamp>` and replaced with a fresh
 state; the connector logs a warning. State is written after every mutation (small file,
@@ -512,8 +555,10 @@ Vitest, same patterns as Telegram v2:
   malformed secret skipped
 - bot-pool: start/stop/reconcile, bad credential isolation, redaction
 - identity: all four policies, retired participant, missing aadObjectId fallback
-- pairing: code shape, TTL, single use, reuse, operator-only
+- pairing: code shape, TTL, single use, reuse, configured pairing participant,
+  AuthEngine outcomes (`auto`, `requires_approval`, `hidden`)
 - commands: `/new`, `/pair`, `/whoami`, `/help`
+- core `pair` tool: merge, dedupe, missing participant, empty ids, persistence
 - communicate: detail clamping, minimal/standard/full, snapshot, tool status/cards,
   timeout, error
 - outbound: sender bot resolution, missing bot, missing conversation, create
@@ -542,7 +587,8 @@ A paid seat is required for durable use.
 - Single-tenant deployment; no multi-tenant tokens.
 - `aadObjectId` is the canonical identity; display names are untrusted.
 - Pairing codes are random, single-use, and time-limited.
-- `/pair` is operator-only.
+- `/pair` is gated by the AuthEngine's `pair` tool policy; any participant, agent, or
+  service granted `pair` can pair, and `hidden`/`requires_approval` behave normally.
 - Unknown users are fail-closed unless a policy explicitly allows them.
 - Bot secrets are read from the SecretStore and redacted from logs/errors.
 - Approval actions are executed as the clicking user, so AuthEngine policy applies.
@@ -558,7 +604,9 @@ A paid seat is required for durable use.
 | Proactive messages fail before install | Log 403s; operator installs each bot |
 | Streaming two-minute limit | SDK finalizes with buffered text; long-run edit handoff is a follow-up |
 | Teams markdown subset | Render conservatively; chunk long messages |
-| `create_user` has no identities | Connector pairing store is the source of truth for provisioned users |
+| `create_user` has no identities | Auto-provision calls `create_user` then the core `pair` tool |
+| Core `pair` tool is a Legion change | Implement and test it in Legion first; the connector depends on it |
+| Pairing policy misconfigured | Document `pair` grants; `hidden`/`requires_approval` fail visibly |
 | Group chats later | Map group `conversationId` to a user participant; sender attribution is a separate design |
 
 ## 18. Future work
