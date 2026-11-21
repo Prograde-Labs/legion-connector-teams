@@ -22,6 +22,11 @@ export interface OutboundDeps {
   options: ResolvedOptions;
 }
 
+function describeError(error: unknown): string {
+  const description = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return description.replace(/Bearer\s+[^\s,;"']+/gi, 'Bearer [redacted]');
+}
+
 export async function deliverMessage(
   deps: OutboundDeps,
   message: { senderId: string; recipientId: string; content: string },
@@ -41,11 +46,17 @@ export async function deliverMessage(
     const userIdentity = recipient?.identities?.find((i) => i.connector === 'teams');
     if (!userIdentity) return;
 
-    const conversation = await app.api.conversations.create({
-      members: [{ id: userIdentity.externalId }],
-      tenantId: deps.options.tenantId,
-      channelData: { tenant: { id: deps.options.tenantId } },
-    });
+    let conversation: { id: string };
+    try {
+      conversation = await app.api.conversations.create({
+        members: [{ id: userIdentity.externalId }],
+        tenantId: deps.options.tenantId,
+        channelData: { tenant: { id: deps.options.tenantId } },
+      });
+    } catch (error) {
+      console.error('Teams conversation creation failed', describeError(error));
+      return;
+    }
     record = {
       conversationId: conversation.id,
       tenantId: deps.options.tenantId,
@@ -62,7 +73,7 @@ export async function deliverMessage(
     try {
       await app.send(record.conversationId, activity);
     } catch (error) {
-      console.error('Teams message delivery failed', error);
+      console.error('Teams message delivery failed', describeError(error));
       return;
     }
   }

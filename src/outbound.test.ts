@@ -82,7 +82,7 @@ describe('deliverMessage', () => {
     const s = setup([
       { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
     ], { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } });
-    const error = new Error('403 bot not installed');
+    const error = Object.assign(new Error('403 Bearer abc123'), { authorization: 'Bearer secret-field' });
     s.send.mockRejectedValueOnce(error);
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
@@ -91,7 +91,32 @@ describe('deliverMessage', () => {
           apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
         { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
       )).resolves.toBeUndefined();
-      expect(log).toHaveBeenCalledWith(expect.any(String), error);
+      expect(log).toHaveBeenCalledWith('Teams message delivery failed', 'Error: 403 Bearer [redacted]');
+      expect(JSON.stringify(log.mock.calls)).not.toContain('abc123');
+      expect(JSON.stringify(log.mock.calls)).not.toContain('secret-field');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('logs a sanitized creation failure without saving or sending', async () => {
+    const s = setup([
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+      { id: 'alice', identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+    ]);
+    s.create.mockRejectedValueOnce(new Error('403 Bearer abc123'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(deliverMessage(
+        { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+          apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
+        { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+      )).resolves.toBeUndefined();
+      expect(log).toHaveBeenCalledWith('Teams conversation creation failed', 'Error: 403 Bearer [redacted]');
+      expect(JSON.stringify(log.mock.calls)).not.toContain('abc123');
+      expect(s.state.conversations).toEqual({});
+      expect(s.save).not.toHaveBeenCalled();
+      expect(s.send).not.toHaveBeenCalled();
     } finally {
       log.mockRestore();
     }
