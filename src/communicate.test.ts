@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runCommunicate, type TeamsStreamer } from './communicate.js';
 import { resolveOptions } from './options.js';
 import type { ConnectorContext, StreamChunk } from '@legion-collective/core';
+import type { MessageActivityInput } from '@microsoft/teams.api';
 
 function fakeCtx(chunks: StreamChunk[]) {
   return {
@@ -125,5 +126,55 @@ describe('runCommunicate', () => {
       options: options(), stream: fakeStream(), send,
     });
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an empty stream error immediately with a fallback', async () => {
+    const send = vi.fn(async (_activity: MessageActivityInput) => undefined);
+    const ctx = fakeCtx([]);
+    vi.mocked(ctx.streamTool).mockResolvedValue({
+      conversationId: 'conv-1',
+      gen: (async function* (): AsyncGenerator<StreamChunk> {
+        yield { type: 'stream:error', error: '' };
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send.mock.calls[0][0].text).toContain('unknown error');
+      })(),
+    });
+    const { result } = await runCommunicate({
+      ctx, userId: 'alice', botOwnerId: 'assistant', text: 'hi',
+      options: options(), stream: fakeStream(), send,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('error');
+  });
+
+  it('sends buffered text when no streamer is supplied', async () => {
+    const send = vi.fn(async (_activity: MessageActivityInput) => undefined);
+    await runCommunicate({
+      ctx: fakeCtx([
+        { type: 'text_delta', delta: 'Hello ' },
+        { type: 'text_delta', delta: 'world' },
+        { type: 'stream:done', result: { status: 'success' } },
+      ]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options(), send,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].text).toBe('Hello world');
+  });
+
+  it('closes immediately on stream done and only once after generator end', async () => {
+    const stream = fakeStream();
+    const ctx = fakeCtx([]);
+    vi.mocked(ctx.streamTool).mockResolvedValue({
+      conversationId: 'conv-1',
+      gen: (async function* (): AsyncGenerator<StreamChunk> {
+        yield { type: 'stream:done', result: { status: 'success' } };
+        expect(stream.closed).toBe(1);
+      })(),
+    });
+    await runCommunicate({
+      ctx, userId: 'alice', botOwnerId: 'assistant', text: 'hi',
+      options: options(), stream, send: async () => undefined,
+    });
+    expect(stream.closed).toBe(1);
   });
 });

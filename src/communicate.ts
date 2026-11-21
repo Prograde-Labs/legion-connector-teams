@@ -34,7 +34,10 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
 
   let buffer = '';
   let final: ToolResult | undefined;
-  let sawError: string | undefined;
+  let sawError = false;
+  let errorText = '';
+  let errorSent = false;
+  let closed = false;
 
   for await (const chunk of gen as AsyncGenerator<StreamChunk>) {
     switch (chunk.type) {
@@ -63,9 +66,18 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
         break;
       case 'stream:done':
         final = chunk.result;
+        if (deps.options.maxDetail !== 'minimal' && !closed && deps.stream) {
+          closed = true;
+          await deps.stream.close();
+        }
         break;
       case 'stream:error':
-        sawError = chunk.error;
+        sawError = true;
+        errorText = chunk.error || 'unknown error';
+        if (!errorSent) {
+          errorSent = true;
+          await deps.send(new MessageActivityInput(`Error: ${errorText}`));
+        }
         break;
       default:
         break;
@@ -73,14 +85,14 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
   }
 
   if (sawError) {
-    await deps.send(new MessageActivityInput(`Error: ${sawError}`));
-    final ??= { status: 'error', error: sawError };
+    final ??= { status: 'error', error: errorText };
   }
 
-  if (deps.options.maxDetail === 'minimal') {
+  if (deps.options.maxDetail === 'minimal' || !deps.stream) {
     if (buffer) await deps.send(new MessageActivityInput(buffer));
-  } else {
-    await deps.stream?.close();
+  } else if (!closed) {
+    closed = true;
+    await deps.stream.close();
   }
 
   if (final?.status === 'pending_approval') {
@@ -88,7 +100,7 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
     for (const approval of data?.approvalRequests ?? []) {
       await deps.send(new MessageActivityInput().addCard('adaptive', approvalCard(approval)));
     }
-  } else if (final?.status === 'error' && !sawError) {
+  } else if (final?.status === 'error' && !errorSent) {
     await deps.send(new MessageActivityInput(`Error: ${final.error ?? 'unknown error'}`));
   } else if (final?.status === 'rejected') {
     await deps.send(new MessageActivityInput(final.message ?? 'Rejected.'));
