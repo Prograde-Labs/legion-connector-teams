@@ -9,6 +9,10 @@ describe('pairing codes', () => {
     }
   });
 
+  it('uses injected random values as alphabet indices', () => {
+    expect(generatePairCode(() => 1)).toBe('333333');
+  });
+
   it('reuses an unexpired code for the same pair', () => {
     const state = emptyState();
     const first = rememberPendingPair(state, 'app', 'aad', 600, 1000);
@@ -27,5 +31,12 @@ describe('pairing codes', () => {
     const state = emptyState();
     const code = rememberPendingPair(state, 'app', 'aad', 10, 1000);
     expect(consumePendingPair(state, code, 12_000)).toBeNull();
+  });
+
+  it('rejects and consumes a code with a malformed expiry', () => {
+    const state = emptyState();
+    state.pendingPairs['ABC234'] = { appId: 'app', aadObjectId: 'aad', expiresAt: 'invalid' };
+    expect(consumePendingPair(state, 'ABC234', 1000)).toBeNull();
+    expect(state.pendingPairs['ABC234']).toBeUndefined();
   });
 });

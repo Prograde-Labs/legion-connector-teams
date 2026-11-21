@@ -1,10 +1,11 @@
+import { randomInt } from 'node:crypto';
 import type { PendingPair, TeamsState } from './state.js';
 
 const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
-export function generatePairCode(random: () => number = Math.random): string {
+export function generatePairCode(random: () => number = () => randomInt(0, ALPHABET.length)): string {
   let code = '';
-  for (let i = 0; i < 6; i++) code += ALPHABET[Math.floor(random() * ALPHABET.length)];
+  for (let i = 0; i < 6; i++) code += ALPHABET[random()];
   return code;
 }
 
@@ -44,5 +45,6 @@ export function consumePendingPair(
   const pair = state.pendingPairs[key];
   if (!pair) return null;
   delete state.pendingPairs[key];
-  return Date.parse(pair.expiresAt) <= now ? null : pair;
+  const expiry = Date.parse(pair.expiresAt);
+  return Number.isNaN(expiry) || expiry <= now ? null : pair;
 }
