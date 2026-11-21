@@ -2992,7 +2992,7 @@ if (!dryRun) {
     body: JSON.stringify({ name: 'operator', password: legionPassword }),
   });
   const { token } = await login.json();
-  const response = await fetch(`${legionUrl}/api/execute`, {
+  const response = await fetch(`${legionUrl}/api/execute?stream=false`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -3005,6 +3005,10 @@ if (!dryRun) {
     }),
   });
   if (!response.ok) throw new Error(`set_secret failed: ${response.status}`);
+  const { result } = (await response.json()) as { result?: { status?: string; error?: string } };
+  if (result?.status !== 'success') {
+    throw new Error(`set_secret failed: ${result?.error ?? result?.status ?? 'unknown'}`);
+  }
   console.log(`Install: teams app get ${appId} --install-link`);
 }
 
