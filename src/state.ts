@@ -27,6 +27,23 @@ export function emptyState(): TeamsState {
   return { version: 1, conversations: {}, pendingPairs: {}, legionConversations: {} };
 }
 
+let tempCounter = 0;
+let saveQueue: Promise<void> = Promise.resolve();
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isState(value: unknown): value is TeamsState {
+  return (
+    isPlainObject(value) &&
+    value.version === 1 &&
+    isPlainObject(value.conversations) &&
+    isPlainObject(value.pendingPairs) &&
+    isPlainObject(value.legionConversations)
+  );
+}
+
 export class StateStore {
   private readonly file: string;
 
@@ -35,27 +52,50 @@ export class StateStore {
   }
 
   async load(): Promise<TeamsState> {
+    let raw: string;
     try {
-      const raw = await readFile(this.file, 'utf8');
-      const parsed = JSON.parse(raw) as Partial<TeamsState>;
-      return {
-        version: 1,
-        conversations: parsed.conversations ?? {},
-        pendingPairs: parsed.pendingPairs ?? {},
-        legionConversations: parsed.legionConversations ?? {},
-      };
+      raw = await readFile(this.file, 'utf8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return emptyState();
-      await rename(this.file, `${this.file}.bak-${Date.now()}`).catch(() => undefined);
+      throw err;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      await this.backup();
       return emptyState();
     }
+
+    if (!isState(parsed)) {
+      await this.backup();
+      return emptyState();
+    }
+
+    return {
+      version: 1,
+      conversations: parsed.conversations,
+      pendingPairs: parsed.pendingPairs,
+      legionConversations: parsed.legionConversations,
+    };
   }
 
   async save(state: TeamsState): Promise<void> {
+    const run = saveQueue.then(() => this.write(state));
+    saveQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async write(state: TeamsState): Promise<void> {
     await mkdir(this.dir, { recursive: true });
-    const tmp = `${this.file}.${process.pid}.tmp`;
+    const tmp = `${this.file}.${process.pid}.${tempCounter++}.tmp`;
     await writeFile(tmp, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
     await rename(tmp, this.file);
     await chmod(this.file, 0o600);
+  }
+
+  private async backup(): Promise<void> {
+    await rename(this.file, `${this.file}.bak-${Date.now()}`);
   }
 }

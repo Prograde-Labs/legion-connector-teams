@@ -1,8 +1,14 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { emptyState, StateStore } from './state.js';
+
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+async function backups(dir: string): Promise<string[]> {
+  return (await readdir(dir)).filter((name) => name.startsWith('state.json.bak-'));
+}
 
 describe('StateStore', () => {
   it('returns empty state when the file is missing', async () => {
@@ -30,6 +36,19 @@ describe('StateStore', () => {
     expect(mode).toBe(0o600);
   });
 
+  it('serializes overlapping saves', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
+    const store = new StateStore(dir);
+    const first = emptyState();
+    first.legionConversations['a'] = 'legion-a';
+    const second = emptyState();
+    second.legionConversations['b'] = 'legion-b';
+
+    await expect(Promise.all([store.save(first), store.save(second)])).resolves.toHaveLength(2);
+
+    await expect(store.load()).resolves.toEqual(second);
+  });
+
   it('backs up corrupt state and starts fresh', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
     await writeFile(join(dir, 'state.json'), '{not json');
@@ -37,5 +56,46 @@ describe('StateStore', () => {
     await expect(store.load()).resolves.toEqual(emptyState());
     const raw = await readFile(join(dir, 'state.json'), 'utf8').catch(() => null);
     expect(raw).toBeNull();
+    const saved = await backups(dir);
+    expect(saved).toHaveLength(1);
+    await expect(readFile(join(dir, saved[0]), 'utf8')).resolves.toBe('{not json');
+  });
+
+  it.each([
+    [
+      'non-object map',
+      '{"version":1,"conversations":[],"pendingPairs":{},"legionConversations":{}}',
+    ],
+    [
+      'unsupported version',
+      '{"version":2,"conversations":{},"pendingPairs":{},"legionConversations":{}}',
+    ],
+  ])('backs up valid JSON with malformed shape: %s', async (_label, contents) => {
+    const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
+    await writeFile(join(dir, 'state.json'), contents);
+    const store = new StateStore(dir);
+    await expect(store.load()).resolves.toEqual(emptyState());
+    const raw = await readFile(join(dir, 'state.json'), 'utf8').catch(() => null);
+    expect(raw).toBeNull();
+    const saved = await backups(dir);
+    expect(saved).toHaveLength(1);
+    await expect(readFile(join(dir, saved[0]), 'utf8')).resolves.toBe(contents);
+  });
+
+  it('propagates read errors other than ENOENT', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
+    await mkdir(join(dir, 'state.json'));
+    await expect(new StateStore(dir).load()).rejects.toMatchObject({ code: 'EISDIR' });
+  });
+
+  it.skipIf(isRoot)('propagates backup failures', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
+    await writeFile(join(dir, 'state.json'), '{not json');
+    await chmod(dir, 0o500);
+    try {
+      await expect(new StateStore(dir).load()).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      await chmod(dir, 0o700);
+    }
   });
 });
