@@ -77,11 +77,11 @@ Users have a `teams` identity whose `externalId` is their Entra `aadObjectId` (t
 
 ## Provisioning
 
-Run from the connector checkout, with `--workspace` pointing to the Legion workspace containing the participant files:
+Run from the connector checkout, with `--workspace` pointing to the Legion workspace containing the participant files. Replace these example values with your own:
 
 ```sh
-node scripts/provision-teams-bot.mjs --participant <id> --base-url https://teams.prograde-labs.com --workspace <workspace>
-node scripts/provision-all.mjs --base-url https://teams.prograde-labs.com --workspace <workspace> --participants <id1,id2>
+node scripts/provision-teams-bot.mjs --participant assistant --base-url https://teams.prograde-labs.com --workspace /srv/legion
+node scripts/provision-all.mjs --base-url https://teams.prograde-labs.com --workspace /srv/legion --participants assistant,operator
 ```
 
 The first script registers a bot, creates a Teams app package, stores its credentials through Legion's `set_secret` API, and updates the participant identity. It uses `--env` (default `<workspace>/.env.teams`), `--legion-url` (default `http://127.0.0.1:3000`), and `--legion-password` (default `LEGION_BOOTSTRAP_PASSWORD`) when supplied. The bulk script passes these options through; without `--participants`, it selects non-retired agents. Both support `--dry-run`, but **dry-run still writes a manifest, icons, and a placeholder bot identity to the participant file**; use only a disposable workspace for it. Provisioning still requires `--base-url` even if Socket Mode will be used.
