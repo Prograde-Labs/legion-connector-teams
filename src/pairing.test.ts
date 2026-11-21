@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { consumePendingPair, generatePairCode, rememberPendingPair, validatePendingPair } from './pairing.js';
+import { consumePendingPair, generatePairCode, pruneExpiredPairs, rememberPendingPair, validatePendingPair } from './pairing.js';
 import { emptyState } from './state.js';
 
 describe('pairing codes', () => {
+  it.each(['validate', 'consume', 'prune'])('removes malformed null entries during %s', (operation) => {
+    const state = emptyState();
+    state.pendingPairs['CODE'] = null as never;
+    if (operation === 'validate') expect(validatePendingPair(state, 'code', 2000)).toBeNull();
+    if (operation === 'consume') expect(consumePendingPair(state, 'code', 2000)).toBeNull();
+    if (operation === 'prune') pruneExpiredPairs(state, 2000);
+    expect('CODE' in state.pendingPairs).toBe(false);
+  });
+
+  it('rejects a non-string expiry', () => {
+    const state = emptyState();
+    state.pendingPairs['CODE'] = { appId: 'app', aadObjectId: 'aad', expiresAt: 123 as never };
+    expect(validatePendingPair(state, 'CODE', 2000)).toBeNull();
+    expect('CODE' in state.pendingPairs).toBe(false);
+  });
+
   it('validates a code without consuming it, case-insensitively', () => {
     const state = emptyState();
     const code = rememberPendingPair(state, 'app', 'aad', 600, 1000);

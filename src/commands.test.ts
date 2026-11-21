@@ -27,6 +27,39 @@ function deps(text: string, overrides: Record<string, unknown> = {}) {
 }
 
 describe('commands', () => {
+  it('allows only one in-flight pairing for a code', async () => {
+    const { deps: d, sent } = deps('/pair');
+    const code = rememberPendingPair(d.state, 'app', 'aad-1', 600);
+    let finish!: () => void;
+    const wait = new Promise<void>((resolve) => { finish = resolve; });
+    const callTool = vi.fn(async () => {
+      await wait;
+      return { result: { status: 'success' }, conversationId: 'c' };
+    });
+    const ctx = { callTool } as unknown as ConnectorContext;
+    const first = handleCommand({ ...d, ctx, text: `/pair ${code} bob` });
+    const second = handleCommand({ ...d, ctx, text: `/pair ${code.toLowerCase()} charlie` });
+    try {
+      expect(callTool).toHaveBeenCalledOnce();
+      expect(sent).toContain('Pairing already in progress.');
+    } finally {
+      finish();
+      await Promise.all([first, second]);
+    }
+  });
+
+  it('releases the in-flight code after a tool exception', async () => {
+    const { deps: d, callTool } = deps('/pair');
+    const code = rememberPendingPair(d.state, 'app', 'aad-1', 600);
+    callTool.mockImplementationOnce(async () => { throw new Error('tool unavailable'); });
+    const request = { ...d, text: `/pair ${code} bob` };
+    await expect(handleCommand(request)).rejects.toThrow('tool unavailable');
+    expect(d.state.pendingPairs[code]).toBeDefined();
+    await expect(handleCommand(request)).resolves.toBe(true);
+    expect(callTool).toHaveBeenCalledTimes(2);
+    expect(d.state.pendingPairs[code]).toBeUndefined();
+  });
+
   it('clears the Legion conversation on /new', async () => {
     const { deps: d, sent } = deps('/new');
     d.state.legionConversations['app:alice'] = 'legacy';

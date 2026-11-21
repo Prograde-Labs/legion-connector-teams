@@ -11,7 +11,8 @@ export function generatePairCode(random: () => number = () => randomInt(0, ALPHA
 
 export function pruneExpiredPairs(state: TeamsState, now = Date.now()): void {
   for (const [code, pair] of Object.entries(state.pendingPairs)) {
-    const expiry = Date.parse(pair.expiresAt);
+    const expiry = pair && typeof pair === 'object' && typeof pair.expiresAt === 'string'
+      ? Date.parse(pair.expiresAt) : NaN;
     if (Number.isNaN(expiry) || expiry <= now) delete state.pendingPairs[code];
   }
 }
@@ -44,8 +45,9 @@ export function validatePendingPair(
 ): PendingPair | null {
   const key = code.toUpperCase();
   const pair = state.pendingPairs[key];
-  if (!pair) return null;
-  const expiry = Date.parse(pair.expiresAt);
+  if (!Object.hasOwn(state.pendingPairs, key)) return null;
+  const expiry = pair && typeof pair === 'object' && typeof pair.expiresAt === 'string'
+    ? Date.parse(pair.expiresAt) : NaN;
   if (Number.isNaN(expiry) || expiry <= now) {
     delete state.pendingPairs[key];
     return null;
