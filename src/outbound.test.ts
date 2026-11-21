@@ -1,0 +1,140 @@
+// src/outbound.test.ts
+import { describe, expect, it, vi } from 'vitest';
+import { deliverMessage } from './outbound.js';
+import { emptyState } from './state.js';
+import { resolveOptions } from './options.js';
+import type { CollectiveLike } from './directory.js';
+
+function setup(participants: Array<Record<string, unknown>>, conversations: Record<string, unknown> = {}) {
+  const state = { ...emptyState(), conversations };
+  const send = vi.fn(async (_conversationId: string, _activity: unknown) => undefined);
+  const create = vi.fn(async () => ({ id: 'conv-new' }));
+  const save = vi.fn(async () => undefined);
+  const collective = {
+    list: () => participants,
+    get: (id: string) => participants.find((p) => p.id === id),
+  } as unknown as CollectiveLike;
+  const apps = {
+    getByAppId: (appId: string) => (appId === 'app' ? { send, api: { conversations: { create } } } : undefined),
+  };
+  return { state, send, create, save, collective, apps };
+}
+
+describe('deliverMessage', () => {
+  it('sends through the sender bot to a stored conversation', async () => {
+    const s = setup(
+      [
+        { id: 'assistant', name: 'Assistant', type: 'agent', tools: {},
+          identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'alice', name: 'Alice', type: 'user', tools: {},
+          identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+      ],
+      { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } },
+    );
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', tenantId: 'tenant-1' }) },
+      { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+    );
+    expect(s.send).toHaveBeenCalledWith('conv-1', expect.anything());
+    expect(s.create).not.toHaveBeenCalled();
+  });
+
+  it('creates a personal conversation when none is stored', async () => {
+    const s = setup([
+      { id: 'assistant', name: 'Assistant', type: 'agent', tools: {},
+        identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+      { id: 'alice', name: 'Alice', type: 'user', tools: {},
+        identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+    ]);
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', tenantId: 'tenant-1' }) },
+      { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+    );
+    expect(s.create).toHaveBeenCalledWith(expect.objectContaining({
+      members: [{ id: 'aad-1' }],
+      tenantId: 'tenant-1',
+      channelData: { tenant: { id: 'tenant-1' } },
+    }));
+    expect(s.state.conversations['app:alice']).toEqual(expect.objectContaining({
+      conversationId: 'conv-new', tenantId: 'tenant-1', aadObjectId: 'aad-1',
+    }));
+    expect(s.save).toHaveBeenCalledWith(s.state);
+    expect(s.send).toHaveBeenCalledWith('conv-new', expect.anything());
+  });
+
+  it('drops when the sender has no Teams bot', async () => {
+    const s = setup([
+      { id: 'assistant', name: 'Assistant', type: 'agent', tools: {} },
+      { id: 'alice', name: 'Alice', type: 'user', tools: {},
+        identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+    ]);
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
+      { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+    );
+    expect(s.send).not.toHaveBeenCalled();
+  });
+
+  it('logs and drops a failed Teams send', async () => {
+    const s = setup([
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+    ], { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } });
+    const error = new Error('403 bot not installed');
+    s.send.mockRejectedValueOnce(error);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(deliverMessage(
+        { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+          apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
+        { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+      )).resolves.toBeUndefined();
+      expect(log).toHaveBeenCalledWith(expect.any(String), error);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('drops when the bot app or recipient identity is missing', async () => {
+    const s = setup([
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'other' }] },
+      { id: 'alice' },
+    ]);
+    const deps = { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+      apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) };
+    const message = { senderId: 'assistant', recipientId: 'alice', content: 'hello' };
+    await deliverMessage(deps, message);
+    expect(s.create).not.toHaveBeenCalled();
+    (s.collective.get('assistant')!.identities![0]).externalId = 'app';
+    await deliverMessage(deps, message);
+    expect(s.create).not.toHaveBeenCalled();
+    expect(s.send).not.toHaveBeenCalled();
+  });
+
+  it('sends chunks with the configured AI label', async () => {
+    const s = setup([
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+    ], { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } });
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', maxMessageChars: 3, aiLabel: false }) },
+      { senderId: 'assistant', recipientId: 'alice', content: 'abcdef' },
+    );
+    expect(s.send).toHaveBeenCalledTimes(2);
+    expect(s.send.mock.calls.map((call: unknown[]) => call[1])).toEqual([
+      expect.objectContaining({ text: 'abc' }), expect.objectContaining({ text: 'def' }),
+    ]);
+    expect(s.send.mock.calls[0][1]).toHaveProperty('entities', undefined);
+    s.send.mockClear();
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', aiLabel: true }) },
+      { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+    );
+    expect(s.send.mock.calls[0][1]).toHaveProperty('entities', [
+      expect.objectContaining({ additionalType: ['AIGeneratedContent'] }),
+    ]);
+  });
+});
