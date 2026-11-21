@@ -269,14 +269,16 @@ new App({
   clientSecret,
   tenantId,
   httpServerAdapter: new ExpressAdapter(expressApp),
-  messagingEndpoint: `/teams/${appId}/api/messages`,
+  messagingEndpoint: `/teams/${bot.participantId}/api/messages`,
   serviceUrl: 'https://smba.trafficmanager.net/teams',
 });
 await app.initialize();
 ```
 
 The Express server listens once. Each bot registration's messaging endpoint is
-`<publicBaseUrl>/teams/<appId>/api/messages`. `GET /health` returns 200 without auth.
+`<publicBaseUrl>/teams/<participantId>/api/messages`; using the participant ID means
+the endpoint is known before `teams app create` returns the app ID.
+`GET /health` returns 200 without auth.
 Proactive sends use the App's configured `serviceUrl` (public cloud default
 `https://smba.trafficmanager.net/teams`); sovereign clouds set `cloud`/`serviceUrl`.
 
@@ -528,7 +530,7 @@ low frequency).
 ```
 teams app create \
   --name <participant-name> \
-  --endpoint <publicBaseUrl>/teams/<appId>/api/messages \
+  --endpoint <publicBaseUrl>/teams/<participantId>/api/messages \
   --env <env-file>
 ```
 
