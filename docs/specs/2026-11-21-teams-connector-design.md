@@ -465,7 +465,8 @@ When a `communicate` result is `pending_approval`, render one Adaptive Card per
       { "title": "Tool", "value": "<tool>" },
       { "title": "Args", "value": "<truncated args>" },
       { "title": "Requester", "value": "<requester>" }
-    ]}
+    ]},
+    { "type": "Input.Text", "id": "reason", "label": "Reason (optional)", "isMultiline": true }
   ],
   "actions": [
     { "type": "Action.Execute", "title": "Approve", "data": { "action": "approve", "approvalId": "<id>" } },
@@ -479,11 +480,15 @@ Built with `@microsoft/teams.cards` (`ExecuteAction` + `SubmitData`) and sent wi
 
 Handlers `app.on('card.action.approve')` / `app.on('card.action.reject')`:
 
-1. read `activity.value.action.data`
+1. read `activity.value.action.data` (card inputs are merged into it, so a
+   rejection reason arrives as `data.reason`)
 2. resolve the clicking user the same way as inbound messages
-3. `ctx.callTool(userId, 'approval_response', { decisions: [{ approvalId, decision }] })`
-4. return a Teams message response
-5. the agent's continuation arrives through `deliver()` and is sent to the chat
+3. `ctx.callTool(userId, 'approval_response', { decisions: [{ approvalId, decision, message }] })`
+   — `message` carries the optional rejection reason to the requester
+4. return an Adaptive Card response: a successful decision replaces the card with
+   an Approved/Rejected status view (no buttons), including the reason for a
+   rejection; a failure keeps the buttons and returns an error message
+5. the agent's continuation arrives through the resumed reply and is sent to the chat
 
 Auth is enforced by the AuthEngine. The operator has `approval_response: auto` by
 default; auto-provisioned users may need it granted. Auth errors are surfaced to the

@@ -135,6 +135,50 @@ describe('TeamsConnector', () => {
     } finally { await connector.stop(); }
   });
 
+  it('passes an optional rejection reason and shows it on the decided card', async () => {
+    const { app, deps } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-reject-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({
+      result: {
+        status: 'success',
+        data: {
+          results: [{ approvalId: 'ap-1', outcome: 'reject' }],
+          resumed: [{ conversationId: 'c1', response: 'Understood.' }],
+        },
+      },
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      const send = vi.fn();
+      const invoke = (reason?: string) => handlers.onApproval(entry, { send, activity: {
+        from: { aadObjectId: 'aad-1' }, channelData: { tenant: { id: 't' } },
+        conversation: { conversationType: 'personal' },
+        value: { action: { data: {
+          approvalId: 'ap-1',
+          tool: 'file_write',
+          argsText: '{"path":"test.txt"}',
+          requesterId: 'assistant',
+          ...(reason === undefined ? {} : { reason }),
+        } } },
+      } } as never, 'reject');
+      const rejected = await invoke('  too risky  ');
+      expect(callTool).toHaveBeenCalledWith('alice', 'approval_response', {
+        decisions: [{ approvalId: 'ap-1', decision: 'reject', message: 'too risky' }],
+      });
+      expect(rejected).toMatchObject({ status: 200, body: {
+        statusCode: 200, type: 'application/vnd.microsoft.card.adaptive',
+      } });
+      const body = JSON.stringify(rejected.body);
+      expect(body).toContain('Rejected');
+      expect(body).toContain('too risky');
+      expect((rejected.body as { value?: { actions?: unknown[] } }).value?.actions ?? []).toHaveLength(0);
+      expect(JSON.stringify(send.mock.calls[0][0])).toContain('Understood.');
+    } finally { await connector.stop(); }
+  });
+
   it('does not route outbound from a duplicate-app loser through the winner', async () => {
     const { app, deps, participants, sent } = setup();
     participants.push({ ...participants[0], id: 'duplicate' });

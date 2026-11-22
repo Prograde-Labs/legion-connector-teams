@@ -135,14 +135,22 @@ export class TeamsConnector implements Connector {
       tool?: string;
       argsText?: string;
       requesterId?: string;
+      reason?: string;
     };
     const approvalId = actionData.approvalId;
     if (typeof approvalId !== 'string' || !approvalId.trim()) return approvalResponse('Missing approval id.');
+    // Card input values are merged into the action data for Action.Execute.
+    // Only a rejection carries a reason; ignore anything typed before approving.
+    const reason =
+      decision === 'reject' && typeof actionData.reason === 'string'
+        ? actionData.reason.trim() || undefined
+        : undefined;
     const result = await handleApprovalAction({
       ctx: this.ctx,
       userId: participant.id,
       decision,
       approvalId,
+      message: reason,
     });
     if (result.status !== 'success') {
       return approvalResponse(`Approval failed: ${result.error ?? result.status}`);
@@ -179,6 +187,7 @@ export class TeamsConnector implements Connector {
         argsText: actionData.argsText,
         requesterId: actionData.requesterId,
         outcome: decided,
+        ...(reason === undefined ? {} : { message: reason }),
       }),
     );
   }

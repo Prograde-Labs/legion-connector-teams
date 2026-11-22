@@ -42,9 +42,16 @@ export async function handleApprovalAction(args: {
   userId: string;
   decision: 'approve' | 'reject';
   approvalId: string;
+  message?: string;
 }): Promise<ToolResult> {
   const { result } = await args.ctx.callTool(args.userId, 'approval_response', {
-    decisions: [{ approvalId: args.approvalId, decision: args.decision }],
+    decisions: [
+      {
+        approvalId: args.approvalId,
+        decision: args.decision,
+        ...(args.message === undefined ? {} : { message: args.message }),
+      },
+    ],
   });
   return result;
 }

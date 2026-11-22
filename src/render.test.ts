@@ -36,6 +36,23 @@ describe('render', () => {
       title: 'Approve',
       data: { action: 'approve', approvalId: 'ap-1' },
     });
+    expect(card.body).toContainEqual(expect.objectContaining({
+      type: 'Input.Text',
+      id: 'reason',
+    }));
+  });
+
+  it('builds a rejected approval card that shows the reason', () => {
+    const card = decidedApprovalCard({
+      outcome: 'rejected',
+      tool: 'file_write',
+      argsText: '{"path":"test.txt"}',
+      requesterId: 'assistant',
+      message: 'Not on a Friday',
+    });
+    expect(card.actions ?? []).toHaveLength(0);
+    expect(JSON.stringify(card)).toContain('Rejected');
+    expect(JSON.stringify(card)).toContain('Not on a Friday');
   });
 
   it('builds a decided approval card without actions', () => {

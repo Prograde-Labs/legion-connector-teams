@@ -67,6 +67,14 @@ export function approvalCard(approval: ApprovalRequest): IAdaptiveCard {
           { title: 'Requester', value: approval.requesterId },
         ],
       },
+      {
+        type: 'Input.Text',
+        id: 'reason',
+        label: 'Reason (optional)',
+        placeholder: 'Shown to the requester when you reject',
+        isMultiline: true,
+        maxLength: 500,
+      },
     ],
     actions: [
       {
