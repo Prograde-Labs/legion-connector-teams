@@ -187,6 +187,7 @@ describe('runCommunicate', () => {
 
   it('renders approval cards for pending_approval', async () => {
     const send = vi.fn(async () => undefined);
+    const stream = fakeStream();
     await runCommunicate({
       ctx: fakeCtx([
         {
@@ -202,9 +203,10 @@ describe('runCommunicate', () => {
         },
       ]),
       userId: 'alice', botOwnerId: 'assistant', text: 'hi',
-      options: options(), stream: fakeStream(), send,
+      options: options(), stream, send,
     });
     expect(send).toHaveBeenCalledTimes(1);
+    expect(stream.updates).toContain('Awaiting approval…');
   });
 
   it('shows tool status before text', async () => {

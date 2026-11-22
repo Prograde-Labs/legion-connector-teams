@@ -108,6 +108,9 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
         final = chunk.result;
         await refreshToolCards();
         if (deps.options.maxDetail !== 'minimal' && !closed && deps.stream) {
+          // Replace a stale "Calling <tool>…" status when the turn paused for
+          // approval; the resumed reply arrives as a separate message.
+          if (final.status === 'pending_approval') deps.stream.update('Awaiting approval…');
           closed = true;
           await deps.stream.close();
         }
