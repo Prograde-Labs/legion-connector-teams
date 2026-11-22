@@ -1,6 +1,6 @@
 // src/bot-pool.test.ts
 import { describe, expect, it, vi } from 'vitest';
-import { BotPool, defaultAppFactory, type AppHandlers, type TeamsAppLike } from './bot-pool.js';
+import { BotPool, defaultAppFactory, type AppHandlers, type TeamsAppFactory, type TeamsAppLike } from './bot-pool.js';
 import { App } from '@microsoft/teams.apps';
 import express from 'express';
 import { resolveOptions } from './options.js';
@@ -25,6 +25,21 @@ const bot = (participantId: string, appId: string): BotEntry => ({
   participantId, name: participantId, appId,
   credentials: { appId, clientSecret: 's', tenantId: 't' },
 });
+
+const directRouteFactory = ((entry, _handlers, transport) => {
+  if (transport.kind === 'http') {
+    const response = entry.credentials.clientSecret === 'rotated' ? 'replacement handler' : 'original handler';
+    transport.expressApp.post(`/teams/${entry.participantId}/api/messages`, (_req, res) => res.send(response));
+  }
+  return fakeApp();
+}) satisfies TeamsAppFactory;
+
+function sendToBot(pool: BotPool, participant: string): Promise<Response> {
+  const { port } = pool['server']!.address() as AddressInfo;
+  return fetch(`http://127.0.0.1:${port}/teams/${participant}/api/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+  });
+}
 
 const handlers: AppHandlers = {
   onMessage: vi.fn(async () => undefined),
@@ -98,6 +113,7 @@ describe('BotPool', () => {
       expect(pool.getByAppId('b')).toBe(b);
       expect(b.initialized).toBe(1);
       expect(pool.getByAppId('a')).toBe(a);
+      expect(factory.mock.calls.filter(([entry]) => entry.appId === 'a')).toHaveLength(1);
       expect(a.initialized).toBe(1);
       expect(a.stopped).toBe(0);
       expect(pool['server']).toBe(server);
@@ -105,22 +121,43 @@ describe('BotPool', () => {
     } finally { await pool.stop(); log.mockRestore(); }
   });
 
-  it('stops only the removed HTTP bot', async () => {
-    const a = fakeApp();
-    const b = fakeApp();
-    const pool = new BotPool(resolveOptions({ port: 0 }), ({ appId }) => appId === 'a' ? a : b, handlers);
+  it('rebuilds the HTTP listener and drops directly mounted routes for a removed bot', async () => {
+    const factory = vi.fn(directRouteFactory);
+    const pool = new BotPool(resolveOptions({ port: 0 }), factory, handlers);
     try {
       await pool.start(new Map([['a', bot('a', 'a')], ['b', bot('b', 'b')]]));
       const server = pool['server'];
+      const [a, b] = factory.mock.results.map(({ value }) => value);
+      expect((await sendToBot(pool, 'b')).status).toBe(200);
 
       await pool.reconcile(new Map([['a', bot('a', 'a')]]));
 
+      expect((await sendToBot(pool, 'b')).status).toBe(404);
+      expect((await sendToBot(pool, 'a')).status).toBe(200);
       expect(b.stopped).toBe(1);
       expect(pool.getByAppId('b')).toBeUndefined();
-      expect(a.stopped).toBe(0);
-      expect(a.initialized).toBe(1);
-      expect(pool.getByAppId('a')).toBe(a);
-      expect(pool['server']).toBe(server);
+      expect(a.stopped).toBe(1);
+      expect(pool.getByAppId('a')).not.toBe(a);
+      expect(pool['server']).not.toBe(server);
+      expect(server?.listening).toBe(false);
+    } finally { await pool.stop(); }
+  });
+
+  it('rebuilds the HTTP listener so rotated credentials use the replacement handler', async () => {
+    const entry = bot('assistant', 'app');
+    const pool = new BotPool(resolveOptions({ port: 0 }), directRouteFactory, handlers);
+    try {
+      await pool.start(new Map([['app', entry]]));
+      const server = pool['server'];
+      expect(await (await sendToBot(pool, 'assistant')).text()).toBe('original handler');
+
+      await pool.reconcile(new Map([['app', { ...entry, credentials: { ...entry.credentials, clientSecret: 'rotated' } }]]));
+
+      const response = await sendToBot(pool, 'assistant');
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('replacement handler');
+      expect(pool['server']).not.toBe(server);
+      expect(server?.listening).toBe(false);
     } finally { await pool.stop(); }
   });
 
@@ -128,17 +165,13 @@ describe('BotPool', () => {
     const pool = new BotPool(resolveOptions({ port: 0 }), defaultAppFactory, handlers);
     try {
       await pool.start(new Map([['app', bot('old', 'app')]]));
-      const { port } = pool['server']!.address() as AddressInfo;
-      const send = (participant: string) => fetch(`http://127.0.0.1:${port}/teams/${participant}/api/messages`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
-      });
-      expect((await send('old')).status).toBe(401);
+      expect((await sendToBot(pool, 'old')).status).toBe(401);
 
       await pool.reconcile(new Map([['app', bot('new', 'app')]]));
 
       expect(pool.ownerOf('app')).toBe('new');
-      expect((await send('old')).status).toBe(404);
-      expect((await send('new')).status).toBe(401);
+      expect((await sendToBot(pool, 'old')).status).toBe(404);
+      expect((await sendToBot(pool, 'new')).status).toBe(401);
     } finally { await pool.stop(); }
   });
 

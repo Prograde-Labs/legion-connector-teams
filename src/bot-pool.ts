@@ -184,12 +184,17 @@ export class BotPool {
   }
 
   async reconcile(bots: Map<string, BotEntry>): Promise<void> {
+    const staleApps = [...this.apps].filter(([appId, { entry }]) => !sameEntry(entry, bots.get(appId)));
+    if (this.options.transport === 'http' && staleApps.length > 0) {
+      // Injected factories can mount routes directly, so stopping a bot may leave its routes behind.
+      await this.stop();
+      return this.start(bots);
+    }
+
     const transport = this.transportContext();
-    for (const [appId, { entry, app }] of [...this.apps]) {
-      if (!sameEntry(entry, bots.get(appId))) {
-        this.apps.delete(appId);
-        await this.stopApp(entry, app);
-      }
+    for (const [appId, { entry, app }] of staleApps) {
+      this.apps.delete(appId);
+      await this.stopApp(entry, app);
     }
     for (const [appId, entry] of bots) {
       if (this.apps.has(appId)) continue;
