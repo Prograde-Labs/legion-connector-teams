@@ -75,8 +75,8 @@ if (!dryRun && !reuse) {
   const mask = process.umask(0o077);
   try {
     execFileSync('teams', socket
-      ? ['app', 'create', '--name', participant.name, '--messaging-mode', 'socket', '--env', envFile]
-      : ['app', 'create', '--name', participant.name, '--endpoint', endpoint, '--env', envFile],
+      ? ['-y', 'app', 'create', '--name', participant.name, '--messaging-mode', 'socket', '--env', envFile]
+      : ['-y', 'app', 'create', '--name', participant.name, '--endpoint', endpoint, '--env', envFile],
     { stdio: ['inherit', 'ignore', 'ignore'] });
   } catch {
     throw new Error(`teams app create failed; check Teams and ${envFile} before retrying.`);
@@ -107,7 +107,6 @@ const manifest = {
   manifestVersion: '1.19',
   version: '1.0.0',
   id: appId,
-  packageName: `com.prograde-labs.legion.${participantId}`,
   developer: {
     name: 'Prograde Labs',
     websiteUrl: 'https://prograde-labs.com',
