@@ -141,7 +141,7 @@ Per-App handlers are unchanged. The message handler branches on conversation typ
 7. Apply the attribution prefix.
 8. Run `communicate` as the group participant.
 
-A bare @mention (empty text after stripping) gets `How can I help?`.
+A bare @mention (empty text after stripping) gets an empty message.
 
 ### 5.2 Conversation record
 
