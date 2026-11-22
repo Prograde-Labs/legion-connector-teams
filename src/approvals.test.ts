@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleApprovalAction, sendApprovalCards } from './approvals.js';
+import { handleApprovalAction, sendApprovalCards, sendResumed } from './approvals.js';
 import type { ConnectorContext } from '@legion-collective/core';
 
 describe('approvals', () => {
@@ -13,6 +13,25 @@ describe('approvals', () => {
       send,
     );
     expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends resumed replies and successor approval cards', async () => {
+    const send = vi.fn(async (_activity: unknown) => undefined);
+    await sendResumed(
+      [
+        { conversationId: 'c1', response: 'written and verified' },
+        {
+          conversationId: 'c1',
+          approvalRequests: [
+            { approvalId: 'ap-2', requesterId: 'assistant', tool: 'file_write', args: {} },
+          ],
+        },
+      ],
+      send,
+      false,
+    );
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(send.mock.calls[0][0])).toContain('written and verified');
   });
 
   it('calls approval_response as the clicking user', async () => {

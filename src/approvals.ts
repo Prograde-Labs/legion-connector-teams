@@ -1,6 +1,6 @@
 import type { ConnectorContext, ToolResult } from '@legion-collective/core';
 import { MessageActivityInput } from '@microsoft/teams.api';
-import { approvalCard, type ApprovalRequest } from './render.js';
+import { approvalCard, sendText, type ApprovalRequest } from './render.js';
 
 export function isAwaitingApproval(result: ToolResult): boolean {
   return result.status === 'pending_approval' ||
@@ -13,6 +13,27 @@ export async function sendApprovalCards(
 ): Promise<void> {
   for (const approval of approvals) {
     await send(new MessageActivityInput().addCard('adaptive', approvalCard(approval)));
+  }
+}
+
+export interface ResumedItem {
+  conversationId?: string;
+  response?: string;
+  approvalRequests?: ApprovalRequest[];
+}
+
+/**
+ * Send replies produced by resuming an approved turn, plus any successor
+ * approval cards the resumed agent raised.
+ */
+export async function sendResumed(
+  resumed: ResumedItem[],
+  send: (activity: MessageActivityInput) => Promise<unknown>,
+  aiLabel: boolean,
+): Promise<void> {
+  for (const item of resumed) {
+    if (item.response) await sendText(send, aiLabel, item.response);
+    if (item.approvalRequests?.length) await sendApprovalCards(item.approvalRequests, send);
   }
 }
 

@@ -1,6 +1,6 @@
 // src/connector.ts
 import type { Connector, ConnectorContext, ConnectorRuntimeDeps } from '@legion-collective/core';
-import { handleApprovalAction } from './approvals.js';
+import { handleApprovalAction, sendResumed, type ResumedItem } from './approvals.js';
 import { BotPool, defaultAppFactory, type CardInvokeResponse, type TeamsAppFactory } from './bot-pool.js';
 import { buildDirectory, type BotEntry } from './directory.js';
 import { describeError } from './errors.js';
@@ -130,6 +130,20 @@ export class TeamsConnector implements Connector {
       decision,
       approvalId,
     });
+    if (result.status === 'success') {
+      const resumed = (result.data as { resumed?: ResumedItem[] } | undefined)?.resumed;
+      if (resumed?.length) {
+        try {
+          await sendResumed(
+            resumed,
+            (activity) => context.send(activity),
+            this.options.aiLabel,
+          );
+        } catch (error) {
+          console.error('Teams resumed delivery failed', describeError(error));
+        }
+      }
+    }
     return approvalResponse(
       result.status === 'success'
         ? 'Approval recorded.'

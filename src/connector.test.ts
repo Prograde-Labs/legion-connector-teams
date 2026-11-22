@@ -91,7 +91,12 @@ describe('TeamsConnector', () => {
     const factory = vi.fn<TeamsAppFactory>(() => app);
     const dir = await mkdtemp(join(tmpdir(), 'teams-approval-'));
     const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
-    const callTool = vi.fn(async () => ({ result: { status: 'success' } }));
+    const callTool = vi.fn(async () => ({
+      result: {
+        status: 'success',
+        data: { resumed: [{ conversationId: 'c1', response: 'resumed text' }] },
+      },
+    }));
     await connector.start({ callTool } as never);
     try {
       const [entry, handlers] = factory.mock.calls[0];
@@ -113,7 +118,8 @@ describe('TeamsConnector', () => {
       expect(callTool).toHaveBeenCalledWith('alice', 'approval_response', {
         decisions: [{ approvalId: 'ap-1', decision: 'approve' }],
       });
-      expect(send).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledOnce();
+      expect(JSON.stringify(send.mock.calls[0][0])).toContain('resumed text');
     } finally { await connector.stop(); }
   });
 

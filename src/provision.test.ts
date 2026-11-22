@@ -49,13 +49,23 @@ it.each(['new', 'reuse', 'force'] as const)('provisions a %s bot without exposin
     await writeFile(participantPath, JSON.stringify(participant));
     await writeFile(join(workspace, 'zip'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
     await writeFile(join(workspace, 'teams'), `#!/bin/sh
-case "$2" in
-  create)
+env_file=""
+app_id=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--env" ]; then env_file="$arg"; fi
+  if [ "$prev" = "get" ]; then app_id="$arg"; fi
+  prev="$arg"
+done
+case " $* " in
+  *" create "*)
     : > '${join(workspace, 'created')}'
-    printf '%s\n' 'CLIENT_ID=new-app' 'CLIENT_SECRET=stub-secret' 'TENANT_ID=tenant' > "$8"
+    printf '%s\n' 'CLIENT_ID=new-app' 'CLIENT_SECRET=stub-secret' 'TENANT_ID=tenant' > "$env_file"
     echo stub-secret
     ;;
-  get) echo "https://example.test/install/$3" ;;
+  *" get "*)
+    echo "https://example.test/install/$app_id"
+    ;;
   *) exit 1 ;;
 esac
 `, { mode: 0o700 });
