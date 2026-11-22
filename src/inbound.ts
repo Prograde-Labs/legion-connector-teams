@@ -221,6 +221,12 @@ export async function handleInbound(
       }
 
       let typing: NodeJS.Timeout | undefined;
+      const stopTyping = () => {
+        if (typing) {
+          clearInterval(typing);
+          typing = undefined;
+        }
+      };
       if (deps.options.typingIntervalMs > 0) {
         const tick = () => context.send(new TypingActivityInput()).catch(() => undefined);
         tick();
@@ -237,13 +243,14 @@ export async function handleInbound(
           options: deps.options,
           stream: context.stream,
           send: (activity) => context.send(activity),
+          stopTyping,
         });
         if (conversationId !== undefined) {
           deps.state.legionConversations[key] = conversationId;
           await deps.stateStore.save(deps.state);
         }
       } finally {
-        if (typing) clearInterval(typing);
+        stopTyping();
       }
       return;
     }

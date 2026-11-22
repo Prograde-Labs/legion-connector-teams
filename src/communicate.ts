@@ -22,6 +22,8 @@ export interface CommunicateDeps {
   options: ResolvedOptions;
   stream?: TeamsStreamer;
   send: (activity: MessageActivityInput) => Promise<unknown>;
+  /** Stop the caller's periodic typing indicator before the final message. */
+  stopTyping?: () => void;
 }
 
 export async function runCommunicate(deps: CommunicateDeps): Promise<{
@@ -102,11 +104,15 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
         break;
       }
       case 'call_timeout':
+        deps.stopTyping?.();
         await reply(`Timed out after ${chunk.timeoutMs} ms.`);
         break;
       case 'stream:done':
         final = chunk.result;
         await refreshToolCards();
+        // The turn is over; stop the periodic typing tick before the final
+        // message so no typing activity lands after the reply.
+        deps.stopTyping?.();
         if (deps.options.maxDetail !== 'minimal' && !closed && deps.stream) {
           // Replace a stale "Calling <tool>…" status when the turn paused for
           // approval; the resumed reply arrives as a separate message.
@@ -120,6 +126,7 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
         errorText = chunk.error || 'unknown error';
         if (!errorSent) {
           errorSent = true;
+          deps.stopTyping?.();
           await reply(`Error: ${errorText}`);
         }
         break;
@@ -132,6 +139,9 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
   if (sawError) {
     final ??= { status: 'error', error: errorText };
   }
+
+  // Any remaining delivery path also ends the turn.
+  deps.stopTyping?.();
 
   if (deps.options.maxDetail === 'minimal' || !deps.stream) {
     if (buffer) await reply(buffer);

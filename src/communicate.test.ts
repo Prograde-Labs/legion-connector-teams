@@ -46,6 +46,24 @@ describe('runCommunicate', () => {
     expect(stream.emitted).toEqual(['final', '!']);
   });
 
+  it('stops typing before the final streamed message', async () => {
+    const order: string[] = [];
+    const stream: TeamsStreamer = {
+      emit() {},
+      update() {},
+      async close() { order.push('close'); return { id: 'm1' }; },
+    };
+    await runCommunicate({
+      ctx: fakeCtx([{ type: 'stream:done', result: { status: 'success' } }]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options(), stream,
+      send: async () => undefined,
+      stopTyping: () => order.push('stopTyping'),
+    });
+    expect(order).toContain('stopTyping');
+    expect(order).toContain('close');
+    expect(order.indexOf('stopTyping')).toBeLessThan(order.indexOf('close'));
+  });
+
   it('refreshes one card per tool with its own accumulated arguments', async () => {
     let nextId = 0;
     const send = vi.fn(async (activity: MessageActivityInput) => ({ id: activity.id ?? `card-${++nextId}` }));
