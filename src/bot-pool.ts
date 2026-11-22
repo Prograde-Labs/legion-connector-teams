@@ -116,6 +116,7 @@ function sameEntry(current: BotEntry, next: BotEntry | undefined): boolean {
 
 export class BotPool {
   private readonly apps = new Map<string, { entry: BotEntry; app: TeamsAppLike }>();
+  private readonly attempted = new Map<string, BotEntry>();
   private expressApp?: express.Express;
   private server?: Server;
 
@@ -126,6 +127,7 @@ export class BotPool {
   ) {}
 
   private async add(entry: BotEntry, transport: TransportContext): Promise<void> {
+    this.attempted.set(entry.appId, entry);
     let operation = 'construct';
     let app: TeamsAppLike | undefined;
     try {
@@ -184,17 +186,19 @@ export class BotPool {
   }
 
   async reconcile(bots: Map<string, BotEntry>): Promise<void> {
-    const staleApps = [...this.apps].filter(([appId, { entry }]) => !sameEntry(entry, bots.get(appId)));
-    if (this.options.transport === 'http' && staleApps.length > 0) {
-      // Injected factories can mount routes directly, so stopping a bot may leave its routes behind.
+    const staleAttempts = [...this.attempted].filter(([appId, entry]) => !sameEntry(entry, bots.get(appId)));
+    if (this.options.transport === 'http' && staleAttempts.length > 0) {
+      // Injected factories can mount routes directly, even before throwing during construction.
       await this.stop();
       return this.start(bots);
     }
 
     const transport = this.transportContext();
-    for (const [appId, { entry, app }] of staleApps) {
+    for (const [appId, entry] of staleAttempts) {
+      this.attempted.delete(appId);
+      const app = this.apps.get(appId)?.app;
       this.apps.delete(appId);
-      await this.stopApp(entry, app);
+      if (app) await this.stopApp(entry, app);
     }
     for (const [appId, entry] of bots) {
       if (this.apps.has(appId)) continue;
@@ -214,6 +218,7 @@ export class BotPool {
   async stop(): Promise<void> {
     for (const { entry, app } of this.apps.values()) await this.stopApp(entry, app);
     this.apps.clear();
+    this.attempted.clear();
     if (this.server) {
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));
       this.server = undefined;

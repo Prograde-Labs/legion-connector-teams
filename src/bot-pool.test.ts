@@ -143,6 +143,37 @@ describe('BotPool', () => {
     } finally { await pool.stop(); }
   });
 
+  it.each(['removed', 'replaced'] as const)('drops the route of a %s HTTP bot whose factory threw', async (change) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const healthyApps: ReturnType<typeof fakeApp>[] = [];
+    const pool = new BotPool(resolveOptions({ port: 0 }), (entry, appHandlers, transport) => {
+      const app = directRouteFactory(entry, appHandlers, transport);
+      if (entry.participantId === 'b') throw new Error('bot unavailable');
+      if (entry.appId === 'a') healthyApps.push(app);
+      return app;
+    }, handlers);
+    try {
+      await pool.start(new Map([['a', bot('a', 'a')], ['b', bot('b', 'b')]]));
+      const server = pool['server'];
+      expect(pool.getByAppId('b')).toBeUndefined();
+      expect((await sendToBot(pool, 'b')).status).toBe(200);
+
+      const desired = new Map([['a', bot('a', 'a')]]);
+      if (change === 'replaced') desired.set('b', bot('new-b', 'b'));
+      await pool.reconcile(desired);
+
+      expect((await sendToBot(pool, 'b')).status).toBe(404);
+      expect((await sendToBot(pool, 'a')).status).toBe(200);
+      if (change === 'replaced') expect((await sendToBot(pool, 'new-b')).status).toBe(200);
+      expect(healthyApps).toHaveLength(2);
+      expect(healthyApps[0].stopped).toBe(1);
+      expect(healthyApps[1].initialized).toBe(1);
+      expect(pool.getByAppId('a')).toBe(healthyApps[1]);
+      expect(pool['server']).not.toBe(server);
+      expect(server?.listening).toBe(false);
+    } finally { await pool.stop(); log.mockRestore(); }
+  });
+
   it('rebuilds the HTTP listener so rotated credentials use the replacement handler', async () => {
     const entry = bot('assistant', 'app');
     const pool = new BotPool(resolveOptions({ port: 0 }), directRouteFactory, handlers);
