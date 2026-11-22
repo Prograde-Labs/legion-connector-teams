@@ -2,6 +2,11 @@ import type { ConnectorContext, ToolResult } from '@legion-collective/core';
 import { MessageActivityInput } from '@microsoft/teams.api';
 import { approvalCard, type ApprovalRequest } from './render.js';
 
+export function isAwaitingApproval(result: ToolResult): boolean {
+  return result.status === 'pending_approval' ||
+    (result.status === 'error' && /requires_approval|\bapproval\b/i.test(result.error ?? ''));
+}
+
 export async function sendApprovalCards(
   approvals: ApprovalRequest[],
   send: (activity: MessageActivityInput) => Promise<unknown>,

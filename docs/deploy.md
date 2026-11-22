@@ -37,12 +37,14 @@ Alternatively set `"transport": "socket"`. Experimental Socket Mode needs no inb
 
 Use a Microsoft 365 tenant with Teams and custom-app upload/sideloading enabled; personal Teams accounts cannot sideload custom apps. A Microsoft 365 Business Basic trial expires after about a month, so durable operation requires a paid seat. Install the Teams Developer CLI and the external `zip` command on the provisioning host; `zip` may be absent on minimal hosts.
 
-Use `scripts/provision-teams-bot.mjs` for each participant or `scripts/provision-all.mjs` for a selection. See the [README](../README.md#provisioning) for arguments, credentials, and the dry-run warning. Manually install every bot in Teams; registration alone does not install it for users. The directory is rescanned every 60 seconds by default.
+The connector only accepts personal chat messages and checks that incoming messages, install events, and approval actions match the tenant in the bot's credentials. With shared fallback enabled, inbound threads are isolated per Teams sender, but proactive routing uses an exact participant route or, failing that, the last active fallback chat.
+
+Use `scripts/provision-teams-bot.mjs` for each participant or `scripts/provision-all.mjs` for a selection. Existing bot registrations are reused; new identities are added through Legion's `pair` API and discovered on the next rescan (60 seconds by default). `--force` registers a replacement and updates the participant file; restart Legion or reconcile its in-memory collective before relying on the replacement, because the old identity remains active until then. See the [README](../README.md#provisioning) for arguments, credentials, and the dry-run warning. Manually install every bot in Teams; registration alone does not install it for users.
 
 ## Operations and troubleshooting
 
 - Watch for `[legion] external connector 'teams' started` in Legion logs. This only confirms connector startup, not that each bot is usable.
-- Monitor per-bot startup and shutdown and `[teams]` initialization, start, stop, directory, and rebuild errors. The current bot pool logs per-bot failures, not successful per-bot start/stop events. HTTP reconciliation restarts the listener on rescans.
+- Monitor per-bot startup and shutdown and `[teams]` initialization, start, stop, directory, and rebuild errors. The current bot pool logs per-bot failures, not successful per-bot start/stop events. HTTP reconciliation restarts the listener only when the bot directory changes.
 - Check for 403 delivery or conversation-creation errors, including an app not installed for the user. Install that bot manually and retry; outbound failures are logged as `Teams message delivery failed` or `Teams conversation creation failed`.
 - Check for missing or malformed `teams-bot` secrets and app ID mismatches; such bots are skipped. Confirm the participant identity and SecretStore key match.
 - Socket Mode has no HTTP health endpoint. For HTTP, check `/health` separately from end-to-end Teams delivery.

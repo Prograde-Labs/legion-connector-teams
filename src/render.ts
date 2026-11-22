@@ -1,4 +1,15 @@
 import type { IAdaptiveCard } from '@microsoft/teams.cards';
+import { MessageActivityInput } from '@microsoft/teams.api';
+
+export async function sendText(
+  send: (activity: MessageActivityInput) => Promise<unknown>,
+  aiLabel: boolean,
+  text: string,
+): Promise<void> {
+  const activity = new MessageActivityInput(text);
+  if (aiLabel) activity.addAiGenerated();
+  await send(activity);
+}
 
 export interface ApprovalRequest {
   approvalId: string;
@@ -10,7 +21,7 @@ export interface ApprovalRequest {
 }
 
 function truncate(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, max)}…`;
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
 function serializeArgs(args: unknown): string {

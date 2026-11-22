@@ -24,7 +24,9 @@ for (const name of ['env', 'legion-url', 'legion-password']) {
   const value = arg(name);
   if (value !== undefined) passthrough.push(`--${name}`, value);
 }
-if (process.argv.includes('--dry-run')) passthrough.push('--dry-run');
+for (const flag of ['--dry-run', '--force']) {
+  if (process.argv.includes(flag)) passthrough.push(flag);
+}
 const participants = [];
 for (const file of await readdir(dir)) {
   if (!file.endsWith('.json')) continue;

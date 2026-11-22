@@ -1,13 +1,18 @@
 // src/connector.ts
 import type { Connector, ConnectorContext, ConnectorRuntimeDeps } from '@legion-collective/core';
 import { handleApprovalAction } from './approvals.js';
-import { BotPool, defaultAppFactory, type TeamsAppFactory } from './bot-pool.js';
+import { BotPool, defaultAppFactory, type CardInvokeResponse, type TeamsAppFactory } from './bot-pool.js';
 import { buildDirectory, type BotEntry } from './directory.js';
 import { describeError } from './errors.js';
-import { handleInbound, type TeamsContextLike } from './inbound.js';
+import { findTeamsActor, readTeamsId } from './identity.js';
+import { handleInbound, isBotTenant, tenantMismatchText, type TeamsContextLike } from './inbound.js';
 import { deliverMessage } from './outbound.js';
 import { resolveOptions, type ResolvedOptions, type TeamsConnectorOptions } from './options.js';
 import { StateStore, type TeamsState } from './state.js';
+
+function approvalResponse(value: string): CardInvokeResponse {
+  return { status: 200, body: { statusCode: 200, type: 'application/vnd.microsoft.activity.message', value } };
+}
 
 export class TeamsConnector implements Connector {
   readonly name = 'teams';
@@ -87,10 +92,11 @@ export class TeamsConnector implements Connector {
   private async onInstall(bot: BotEntry, context: TeamsContextLike): Promise<void> {
     if (!this.state || !this.store) return;
     const activity = context.activity;
+    if (!isBotTenant(bot, activity)) return;
     if (activity.conversation?.conversationType !== 'personal' || !activity.conversation.id?.trim()) return;
-    const aadObjectId = activity.from?.aadObjectId ?? activity.from?.id;
+    const aadObjectId = readTeamsId(activity.from);
     if (!aadObjectId) return;
-    const participant = this.deps.collective.findByIdentity('teams', aadObjectId);
+    const participant = findTeamsActor(this.deps.collective, aadObjectId);
     if (!participant) return;
     this.state.conversations[`${bot.appId}:${participant.id}`] = {
       conversationId: activity.conversation.id,
@@ -104,30 +110,24 @@ export class TeamsConnector implements Connector {
   }
 
   private async onApproval(
-    _bot: BotEntry,
+    bot: BotEntry,
     context: TeamsContextLike,
     decision: 'approve' | 'reject',
-  ): Promise<void> {
-    if (!this.ctx) return;
-    const aadObjectId = context.activity.from?.aadObjectId ?? context.activity.from?.id;
-    if (!aadObjectId) return;
-    const participant = this.deps.collective.findByIdentity('teams', aadObjectId);
-    if (!participant) {
-      await context.send('Not registered.');
-      return;
-    }
-    const data = context.activity.value?.action?.data as { approvalId?: string } | undefined;
-    if (!data?.approvalId) {
-      await context.send('Missing approval id.');
-      return;
-    }
+  ): Promise<CardInvokeResponse> {
+    if (!this.ctx) return approvalResponse('This bot is not available.');
+    if (!isBotTenant(bot, context.activity)) return approvalResponse(tenantMismatchText);
+    const aadObjectId = readTeamsId(context.activity.from);
+    const participant = aadObjectId ? findTeamsActor(this.deps.collective, aadObjectId) : undefined;
+    if (!participant) return approvalResponse('Not registered.');
+    const approvalId = context.activity.value?.action?.data?.approvalId;
+    if (typeof approvalId !== 'string' || !approvalId.trim()) return approvalResponse('Missing approval id.');
     const result = await handleApprovalAction({
       ctx: this.ctx,
       userId: participant.id,
       decision,
-      approvalId: data.approvalId,
+      approvalId,
     });
-    await context.send(
+    return approvalResponse(
       result.status === 'success'
         ? 'Approval recorded.'
         : `Approval failed: ${result.error ?? result.status}`,

@@ -1,6 +1,6 @@
 # Legion Microsoft Teams connector
 
-The Teams connector exposes Legion participants as individual Teams bots for personal 1:1 conversations. It supports text, conversation continuity, pairing, and approval cards; group chats and channels are not supported.
+The Teams connector exposes Legion participants as individual Teams bots for personal 1:1 conversations. It supports text, conversation continuity, pairing, and approval cards. Messages outside personal chats are rejected, and messages, installs, and approval actions must report the tenant configured in the bot's credentials.
 
 ## Prerequisites and installation
 
@@ -50,7 +50,7 @@ Options and defaults:
 | `socketGeos` | `["amer", "emea", "apac"]` | Socket Mode regions. |
 | `unknownUserPolicy` | `pairing` | `pairing`, `auto-provision`, `reject`, or `fallback`. |
 | `fallbackUserId` | unset | Required for `fallback`. |
-| `provisionerId` | `operator` | Caller for auto-provisioning `create_user`. |
+| `provisionerId` | `operator` | Caller for auto-provisioning `create_user` or `modify_user`. |
 | `pairingParticipantId` | unset | Caller for `pair`; defaults to the sender, or the provisioner during auto-provisioning. |
 | `pairingTtlSeconds` | `600` | Pairing code lifetime. |
 | `maxDetail` | `standard` | `minimal`, `standard`, or `full`. |
@@ -66,7 +66,9 @@ HTTP listens on port 3978 by default, with each bot at `/teams/<participantId>/a
 
 Each Teams-facing agent has a `teams-bot` identity whose `externalId` is its app ID. Its Legion SecretStore entry is scoped to that participant, keyed `teams-bot/<appId>`, and contains JSON `{ "appId": "...", "clientSecret": "...", "tenantId": "..." }`. Set `LEGION_SECRETS_KEY` for Legion; the connector cannot start without its SecretStore. Never commit credentials or the provisioning environment file.
 
-Users have a `teams` identity whose `externalId` is their Entra `aadObjectId` (the connector falls back to the Teams sender ID if absent). Unknown users default to receiving a pairing code. An authorized user can run `/pair <code> <participant-id>`: the connector calls Legion's core `pair` tool, subject to the caller's AuthEngine policy. Configure `pairingParticipantId` if another participant should make that call. Auto-provisioning also requires `create_user` permission for `provisionerId` and `pair` permission for the pairing caller. Fallback maps unknown users to `fallbackUserId`; use it only when that trust model is appropriate.
+Users have a `teams` identity whose `externalId` is their Entra `aadObjectId` (the connector falls back to the Teams sender ID if absent). Unknown users default to receiving a pairing code. They give the code to a registered user, who runs `/pair <code> <participant-id>` in a personal chat with the same bot. The connector calls Legion's core `pair` tool, subject to the caller's AuthEngine policy. Configure `pairingParticipantId` if another participant should make that call. Auto-provisioning requires `create_user` (or `modify_user` for an existing account) for `provisionerId` and `pair` for the pairing caller. It grants the provisioned user `communicate` and `approval_response`.
+
+Fallback maps unknown users to one shared Legion participant (`fallbackUserId`) but keeps a separate conversation and Legion thread per Teams sender. Proactive delivery is best effort: an exact participant route takes precedence; otherwise the bot sends to the most recently active fallback chat. It cannot reliably target a particular fallback sender, so avoid using shared fallback for private proactive messages.
 
 ## Chat commands
 
@@ -84,7 +86,9 @@ node scripts/provision-teams-bot.mjs --participant assistant --base-url https://
 node scripts/provision-all.mjs --base-url https://teams.prograde-labs.com --workspace /srv/legion --participants assistant,operator
 ```
 
-The first script registers a bot, creates a Teams app package, stores its credentials through Legion's `set_secret` API, and updates the participant identity. It uses `--env` (default `<workspace>/.env.teams`), `--legion-url` (default `http://127.0.0.1:3000`), and `--legion-password` (default `LEGION_BOOTSTRAP_PASSWORD`) when supplied. The bulk script passes these options through; without `--participants`, it selects non-retired agents. Both support `--dry-run`, but **dry-run still writes a manifest, icons, and a placeholder bot identity to the participant file**; use only a disposable workspace for it. Provisioning still requires `--base-url` even if Socket Mode will be used.
+The script reuses an existing `teams-bot` app ID and its stored credentials without calling `teams app create`. For a new bot it registers the app and stores credentials via Legion's `set_secret` tool. The credentials file (`--env`, default `<workspace>/.env.teams`) is restricted to mode `0600`. The script builds the app package with `zip` and calls Legion's `pair` tool as `operator`, so a running connector discovers new identities on its next rescan. Set `--legion-url` (default `http://127.0.0.1:3000`) and `--legion-password` (default `LEGION_BOOTSTRAP_PASSWORD`) as needed.
+
+Use `--force` to register a new bot and replace the identity in the participant file. The running collective still has the old identity until it is reconciled or Legion is restarted; restart promptly before making further changes to that participant. The old Teams registration is not deleted. Both scripts accept `--force` and `--dry-run`; without `--participants` the batch script selects non-retired agents. **Dry runs still write manifests and icons and set a placeholder identity for bots they would create**, so use a disposable workspace. Provisioning requires `--base-url` even for Socket Mode.
 
 Install each generated app manually in Teams using the printed install link or package. If SecretStore setup fails after app creation, credentials remain in the environment file; follow the script's recovery message before rerunning to avoid duplicate registrations.
 

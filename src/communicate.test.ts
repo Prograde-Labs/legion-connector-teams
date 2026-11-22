@@ -29,8 +29,72 @@ function fakeStream(): TeamsStreamer & { emitted: string[]; updates: string[]; c
 }
 
 const options = (overrides = {}) => resolveOptions({ stateDir: '/tmp/x', ...overrides });
+const aiLabel = { entities: [expect.objectContaining({ additionalType: ['AIGeneratedContent'] })] };
 
 describe('runCommunicate', () => {
+  it('replaces native stream text on a snapshot', async () => {
+    const stream = { ...fakeStream(), clearText() { this.emitted.length = 0; } };
+    await runCommunicate({
+      ctx: fakeCtx([
+        { type: 'text_delta', delta: 'draft' },
+        { type: 'message_snapshot', content: 'final' },
+        { type: 'text_delta', delta: '!' },
+      ]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options(), stream,
+      send: async () => undefined,
+    });
+    expect(stream.emitted).toEqual(['final', '!']);
+  });
+
+  it('refreshes one card per tool with its own accumulated arguments', async () => {
+    let nextId = 0;
+    const send = vi.fn(async (activity: MessageActivityInput) => ({ id: activity.id ?? `card-${++nextId}` }));
+    await runCommunicate({
+      ctx: fakeCtx([
+        { type: 'tool_call_start', index: 0, id: 't1', name: 'search' },
+        { type: 'tool_call_args_delta', index: 0, delta: '{"q":' },
+        { type: 'tool_call_args_delta', index: 0, delta: '"hi"}' },
+        { type: 'tool_call_start', index: 1, id: 't2', name: 'get' },
+        { type: 'tool_call_args_delta', index: 1, delta: '{"id":2}' },
+        { type: 'stream:done', result: { status: 'success' } },
+      ]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options({ toolDisplay: 'cards' }), send,
+    });
+    const cards = send.mock.calls.map(([activity]) => ({ id: activity.id, card: activity.attachments?.[0] }));
+    const card = (title: string, args: string, id?: string) => ({ id, card: expect.objectContaining({
+      contentType: 'application/vnd.microsoft.card.adaptive',
+      content: expect.objectContaining({ body: [expect.objectContaining({ text: `🛠️ ${title}` }), expect.objectContaining({ text: args })] }),
+    }) });
+    expect(cards).toEqual([
+      card('search', '(args pending)'), card('search', '{"q":"hi"}', 'card-1'),
+      card('get', '(args pending)'), card('get', '{"id":2}', 'card-2'),
+    ]);
+  });
+
+  it('uses the successful result response as labeled text when no deltas arrived', async () => {
+    const send = vi.fn(async (_activity: MessageActivityInput) => undefined);
+    await runCommunicate({
+      ctx: fakeCtx([{ type: 'stream:done', result: { status: 'success', data: { response: 'Answer' } } }]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options(), stream: fakeStream(), send,
+    });
+    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ text: 'Answer', ...aiLabel }));
+  });
+
+  it('labels timeout and error text', async () => {
+    const send = vi.fn(async (_activity: MessageActivityInput) => undefined);
+    await runCommunicate({
+      ctx: fakeCtx([
+        { type: 'call_timeout', timeoutMs: 500 },
+        { type: 'stream:done', result: { status: 'error', error: 'failed' } },
+      ]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options(), send,
+    });
+    expect(send.mock.calls).toEqual([
+      [expect.objectContaining({ text: 'Timed out after 500 ms.', ...aiLabel })],
+      [expect.objectContaining({ text: 'Error: failed', ...aiLabel })],
+    ]);
+  });
   it('streams text deltas and closes the stream', async () => {
     const stream = fakeStream();
     const send = vi.fn(async () => undefined);
@@ -39,11 +103,11 @@ describe('runCommunicate', () => {
         { type: 'iteration_start', iteration: 1 },
         { type: 'text_delta', delta: 'Hello ' },
         { type: 'text_delta', delta: 'world' },
-        { type: 'stream:done', result: { status: 'success', data: { conversationId: 'conv-1' } } },
+        { type: 'stream:done', result: { status: 'success', data: { conversationId: 'thread-1' } } },
       ]),
       userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options(), stream, send,
     });
-    expect(result.conversationId).toBe('conv-1');
+    expect(result.conversationId).toBe('thread-1');
     expect(stream.emitted).toEqual(['Hello ', 'world']);
     expect(stream.updates).toContain('Thinking…');
     expect(stream.closed).toBe(1);
@@ -63,6 +127,7 @@ describe('runCommunicate', () => {
     });
     expect(stream.emitted).toEqual([]);
     expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ text: 'Hello world', ...aiLabel }));
   });
 
   it('renders approval cards for pending_approval', async () => {
@@ -159,6 +224,7 @@ describe('runCommunicate', () => {
     });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0].text).toBe('Hello world');
+    expect(send.mock.calls[0][0]).toMatchObject(aiLabel);
   });
 
   it('closes immediately on stream done and only once after generator end', async () => {

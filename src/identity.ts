@@ -16,6 +16,15 @@ export type IdentityOutcome =
   | { kind: 'auto-provision'; aadObjectId: string; displayName?: string }
   | { kind: 'fallback'; user: ResolvedUser };
 
+export function readTeamsId(from: { aadObjectId?: string; id?: string } | undefined): string | undefined {
+  return from?.aadObjectId?.trim() || from?.id?.trim();
+}
+
+export function findTeamsActor(collective: CollectiveLike, aadObjectId: string) {
+  const participant = collective.findByIdentity('teams', aadObjectId);
+  return participant?.status === 'retired' ? undefined : participant;
+}
+
 export function resolveIdentity(args: {
   collective: CollectiveLike;
   state: TeamsState;
@@ -27,8 +36,8 @@ export function resolveIdentity(args: {
 }): IdentityOutcome {
   const { collective, state, appId, aadObjectId, displayName, options, now } = args;
 
-  const found = collective.findByIdentity('teams', aadObjectId);
-  if (found && (found.status ?? 'active') !== 'retired') {
+  const found = findTeamsActor(collective, aadObjectId);
+  if (found) {
     return {
       kind: 'resolved',
       user: { participantId: found.id, aadObjectId, displayName },

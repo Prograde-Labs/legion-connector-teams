@@ -51,6 +51,13 @@ describe('render', () => {
     expect(JSON.stringify(card)).toContain('<unserializable args>');
   });
 
+  it('includes the ellipsis in the approval argument length limit', () => {
+    const card = approvalCard({ approvalId: 'ap', requesterId: 'alice', tool: 'test', args: 'x'.repeat(600) });
+    expect(card.body?.[1]).toMatchObject({ facts: expect.arrayContaining([
+      { title: 'Args', value: `"${'x'.repeat(498)}…` },
+    ]) });
+  });
+
   it('formats error and rejected results', () => {
     expect(formatToolResult({ status: 'error', error: 'boom' })).toMatch(/boom/);
     expect(formatToolResult({ status: 'rejected', message: 'no' })).toMatch(/no/);

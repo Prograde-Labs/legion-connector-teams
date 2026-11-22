@@ -1,6 +1,8 @@
 // src/bot-pool.test.ts
 import { describe, expect, it, vi } from 'vitest';
-import { BotPool, type TeamsAppLike } from './bot-pool.js';
+import { BotPool, defaultAppFactory, type AppHandlers, type TeamsAppLike } from './bot-pool.js';
+import { App } from '@microsoft/teams.apps';
+import express from 'express';
 import { resolveOptions } from './options.js';
 import type { BotEntry } from './directory.js';
 import type { AddressInfo } from 'node:net';
@@ -24,14 +26,50 @@ const bot = (participantId: string, appId: string): BotEntry => ({
   credentials: { appId, clientSecret: 's', tenantId: 't' },
 });
 
-const handlers = {
+const handlers: AppHandlers = {
   onMessage: vi.fn(async () => undefined),
   onInstall: vi.fn(async () => undefined),
   onConversationUpdate: vi.fn(async () => undefined),
-  onApproval: vi.fn(async () => undefined),
+  onApproval: async () => ({ status: 200, body: {
+    statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'Approval recorded.',
+  } }),
 };
 
 describe('BotPool', () => {
+  it('returns the invoke response from the SDK approve and reject event callbacks', async () => {
+    const on = vi.spyOn(App.prototype, 'on');
+    const entry = bot('assistant', 'app');
+    const onApproval = vi.fn(handlers.onApproval);
+    try {
+      defaultAppFactory(entry, { ...handlers, onApproval }, { kind: 'http', expressApp: express() });
+      for (const decision of ['approve', 'reject'] as const) {
+        const callback = on.mock.calls.find(([name]) => name === `card.action.${decision}`)?.[1];
+        expect(callback).toBeDefined();
+        const context = { activity: {} } as never;
+        expect(await callback!(context)).toEqual({ status: 200, body: {
+          statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'Approval recorded.',
+        } });
+        expect(onApproval).toHaveBeenLastCalledWith(entry, context, decision);
+      }
+    } finally { on.mockRestore(); }
+  });
+  it.each(['http', 'socket'] as const)('keeps unchanged %s apps and replaces changed credentials', async (transport) => {
+    const factory = vi.fn(fakeApp);
+    const pool = new BotPool(resolveOptions({ transport, port: 0 }), factory, handlers);
+    await pool.start(new Map([['app', bot('assistant', 'app')]]));
+    try {
+      const first = pool.getByAppId('app');
+      const entry = bot('assistant', 'app');
+      await pool.reconcile(new Map([['app', entry]]));
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(pool.getByAppId('app')).toBe(first);
+      await pool.reconcile(new Map([['app', { ...entry, credentials: { ...entry.credentials, clientSecret: 'rotated' } }]]));
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(factory.mock.results[0].value.stopped).toBe(1);
+      expect(pool.getByAppId('app')).not.toBe(first);
+      expect(pool.ownerOf('app')).toBe('assistant');
+    } finally { await pool.stop(); }
+  });
   it.each(['construct', 'stop'])('redacts the bot client secret in %s diagnostics', async operation => {
     const entry = bot('assistant', 'app');
     entry.credentials.clientSecret = 'super-secret';

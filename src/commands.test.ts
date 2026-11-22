@@ -70,13 +70,13 @@ describe('commands', () => {
 
   it('pairs with a valid code via the core pair tool', async () => {
     const { deps: d, callTool, sent } = deps('/pair ABCDEF bob');
-    rememberPendingPair(d.state, 'app', 'aad-1', 600);
+    rememberPendingPair(d.state, 'app', 'aad-9', 600);
     const code = Object.keys(d.state.pendingPairs)[0];
     await handleCommand({ ...d, text: `/pair ${code} bob` });
     expect(callTool).toHaveBeenCalledWith('alice', 'pair', {
       participantId: 'bob',
       connector: 'teams',
-      externalId: 'aad-1',
+      externalId: 'aad-9',
     });
     expect(sent[0]).toMatch(/Paired bob/);
     expect(d.state.pendingPairs[code]).toBeUndefined();
@@ -85,6 +85,7 @@ describe('commands', () => {
   it.each([
     ['error', 'not authorized', /not authorized/],
     ['pending_approval', undefined, /awaiting approval/],
+    ['error', 'Authorization: requires_approval', /awaiting approval/],
   ])('retains the code on %s', async (status, error, message) => {
     const { deps: d, sent } = deps('/pair');
     const code = rememberPendingPair(d.state, 'app', 'aad-1', 600);
@@ -103,9 +104,9 @@ describe('commands', () => {
     expect(d.state.pendingPairs['ABC234']).toBeUndefined();
   });
 
-  it('does not consume a code belonging to another identity', async () => {
+  it('does not consume a code belonging to another bot', async () => {
     const { deps: d, callTool } = deps('/pair');
-    const code = rememberPendingPair(d.state, 'app', 'other', 600);
+    const code = rememberPendingPair(d.state, 'other-app', 'aad-1', 600);
     await handleCommand({ ...d, text: `/pair ${code} bob` });
     expect(callTool).not.toHaveBeenCalled();
     expect(d.state.pendingPairs[code]).toBeDefined();

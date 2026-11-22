@@ -19,7 +19,7 @@ export interface OutboundDeps {
   collective: CollectiveLike;
   state: TeamsState;
   stateStore: StateStore;
-  apps: { getByAppId(appId: string): OutboundApp | undefined };
+  apps: { getByAppId(appId: string): OutboundApp | undefined; ownerOf(appId: string): string | undefined };
   options: ResolvedOptions;
 }
 
@@ -29,13 +29,21 @@ export async function deliverMessage(
 ): Promise<void> {
   const sender = deps.collective.get(message.senderId);
   const botIdentity = sender?.identities?.find((i) => i.connector === 'teams-bot');
-  if (!botIdentity) return;
+  if (!botIdentity || deps.apps.ownerOf(botIdentity.externalId) !== message.senderId) return;
 
   const app = deps.apps.getByAppId(botIdentity.externalId);
   if (!app) return;
 
   const key = `${botIdentity.externalId}:${message.recipientId}`;
   let record = deps.state.conversations[key];
+
+  if (!record) {
+    for (const [candidateKey, candidate] of Object.entries(deps.state.conversations)) {
+      if (candidateKey.startsWith(`${key}:`) && (!record || candidate.updatedAt > record.updatedAt)) {
+        record = candidate;
+      }
+    }
+  }
 
   if (!record) {
     const recipient = deps.collective.get(message.recipientId);

@@ -96,6 +96,8 @@ export class StateStore {
   }
 
   private async backup(): Promise<void> {
-    await rename(this.file, `${this.file}.bak-${Date.now()}`);
+    const path = `${this.file}.bak-${Date.now()}`;
+    await rename(this.file, path);
+    console.warn(`[teams] Corrupt state backed up to ${path}`);
   }
 }

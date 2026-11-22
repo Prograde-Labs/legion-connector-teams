@@ -1,5 +1,6 @@
 // src/commands.ts
 import type { ConnectorContext } from '@legion-collective/core';
+import { isAwaitingApproval } from './approvals.js';
 import { validatePendingPair } from './pairing.js';
 import type { ResolvedOptions } from './options.js';
 import type { TeamsState } from './state.js';
@@ -10,6 +11,8 @@ export interface CommandDeps {
   appId: string;
   participantId: string;
   aadObjectId: string;
+  conversationKey?: string;
+  isFallback?: boolean;
   text: string;
   state: TeamsState;
   ctx: ConnectorContext;
@@ -20,14 +23,19 @@ export interface CommandDeps {
 export async function handleCommand(deps: CommandDeps): Promise<boolean> {
   const [raw, ...rest] = deps.text.trim().split(/\s+/);
   const command = raw.toLowerCase();
+  const key = deps.conversationKey ?? `${deps.appId}:${deps.participantId}`;
 
   switch (command) {
     case '/new': {
-      delete deps.state.legionConversations[`${deps.appId}:${deps.participantId}`];
+      delete deps.state.legionConversations[key];
       await deps.send('Started a new conversation.');
       return true;
     }
     case '/pair': {
+      if (deps.isFallback) {
+        await deps.send('Only registered users can redeem pairing codes.');
+        return true;
+      }
       const code = rest[0]?.toUpperCase();
       const target = rest[1];
       if (!code || !target) {
@@ -41,7 +49,7 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
       pairingInFlight.add(code);
       try {
         const pending = validatePendingPair(deps.state, code);
-        if (!pending || pending.appId !== deps.appId || pending.aadObjectId !== deps.aadObjectId) {
+        if (!pending || pending.appId !== deps.appId) {
           await deps.send('Pairing code is invalid or expired.');
           return true;
         }
@@ -49,12 +57,12 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
         const { result } = await deps.ctx.callTool(caller, 'pair', {
           participantId: target,
           connector: 'teams',
-          externalId: deps.aadObjectId,
+          externalId: pending.aadObjectId,
         });
         if (result.status === 'success') {
           delete deps.state.pendingPairs[code.toUpperCase()];
-          await deps.send(`Paired ${target} with your Teams identity.`);
-        } else if (result.status === 'pending_approval') {
+          await deps.send(`Paired ${target} with Teams identity ${pending.aadObjectId}.`);
+        } else if (isAwaitingApproval(result)) {
           await deps.send('Pairing is awaiting approval.');
         } else {
           await deps.send(`Pairing failed: ${result.error ?? result.status}`);
@@ -66,7 +74,7 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
     }
     case '/whoami': {
       const conversation =
-        deps.state.legionConversations[`${deps.appId}:${deps.participantId}`] ?? '(none)';
+        deps.state.legionConversations[key] ?? '(none)';
       await deps.send(
         `Participant: ${deps.participantId}\nTeams ID: ${deps.aadObjectId}\n` +
         `Bot app: ${deps.appId}\nConversation: ${conversation}`,
@@ -77,7 +85,7 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
       await deps.send(
         'Commands:\n' +
         '/new — start a new conversation\n' +
-        '/pair <code> <participant-id> — pair your Teams identity\n' +
+        '/pair <code> <participant-id> — pair a pending Teams identity\n' +
         '/whoami — show your identity\n' +
         '/help — this message',
       );

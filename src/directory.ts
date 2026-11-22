@@ -6,6 +6,7 @@ export interface DirectoryParticipant {
   name?: string;
   type?: string;
   status?: string;
+  tools?: Readonly<Record<string, unknown>>;
   identities?: Array<{ connector: string; externalId: string }>;
 }
 

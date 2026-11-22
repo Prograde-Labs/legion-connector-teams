@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { emptyState, StateStore } from './state.js';
 
 const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -53,7 +53,13 @@ describe('StateStore', () => {
     const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
     await writeFile(join(dir, 'state.json'), '{not json');
     const store = new StateStore(dir);
-    await expect(store.load()).resolves.toEqual(emptyState());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(store.load()).resolves.toEqual(emptyState());
+      const [saved] = await backups(dir);
+      expect(warn).toHaveBeenCalledWith(`[teams] Corrupt state backed up to ${join(dir, saved)}`);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('{not json');
+    } finally { warn.mockRestore(); }
     const raw = await readFile(join(dir, 'state.json'), 'utf8').catch(() => null);
     expect(raw).toBeNull();
     const saved = await backups(dir);

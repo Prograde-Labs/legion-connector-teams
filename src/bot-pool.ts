@@ -2,6 +2,7 @@
 import { createServer, type Server } from 'node:http';
 import express from 'express';
 import { App, ExpressAdapter } from '@microsoft/teams.apps';
+import type { AdaptiveCardActionMessageResponse } from '@microsoft/teams.api';
 import type { BotEntry } from './directory.js';
 import { describeError } from './errors.js';
 import type { ResolvedOptions } from './options.js';
@@ -19,7 +20,12 @@ export interface AppHandlers {
   onMessage: (entry: BotEntry, ctx: never) => Promise<void>;
   onInstall: (entry: BotEntry, ctx: never) => Promise<void>;
   onConversationUpdate: (entry: BotEntry, ctx: never) => Promise<void>;
-  onApproval: (entry: BotEntry, ctx: never, decision: 'approve' | 'reject') => Promise<void>;
+  onApproval: (entry: BotEntry, ctx: never, decision: 'approve' | 'reject') => Promise<CardInvokeResponse>;
+}
+
+export interface CardInvokeResponse {
+  status: 200;
+  body: AdaptiveCardActionMessageResponse;
 }
 
 export type TransportContext =
@@ -55,21 +61,22 @@ export function defaultAppFactory(
   app.on('message', (ctx) => handlers.onMessage(entry, ctx as never));
   app.on('install.add', (ctx) => handlers.onInstall(entry, ctx as never));
   app.on('conversationUpdate', (ctx) => handlers.onConversationUpdate(entry, ctx as never));
-  app.on('card.action.approve', async (ctx) => {
-    await handlers.onApproval(entry, ctx as never, 'approve');
-    return undefined;
-  });
-  app.on('card.action.reject', async (ctx) => {
-    await handlers.onApproval(entry, ctx as never, 'reject');
-    return undefined;
-  });
+  app.on('card.action.approve', (ctx) => handlers.onApproval(entry, ctx as never, 'approve'));
+  app.on('card.action.reject', (ctx) => handlers.onApproval(entry, ctx as never, 'reject'));
 
   return app as unknown as TeamsAppLike;
+}
+
+function sameEntry(current: BotEntry, next: BotEntry | undefined): boolean {
+  return next !== undefined && current.participantId === next.participantId &&
+    current.appId === next.appId && current.credentials.clientSecret === next.credentials.clientSecret &&
+    current.credentials.tenantId === next.credentials.tenantId;
 }
 
 export class BotPool {
   private readonly apps = new Map<string, { entry: BotEntry; app: TeamsAppLike }>();
   private server?: Server;
+  private httpDirectory?: Map<string, BotEntry>;
 
   constructor(
     private readonly options: ResolvedOptions,
@@ -123,6 +130,7 @@ export class BotPool {
         throw error;
       }
       this.server = server;
+      this.httpDirectory = new Map(bots);
       return;
     }
 
@@ -133,15 +141,17 @@ export class BotPool {
 
   async reconcile(bots: Map<string, BotEntry>): Promise<void> {
     if (this.options.transport === 'http') {
+      if (this.httpDirectory?.size === bots.size &&
+          [...this.httpDirectory].every(([id, entry]) => sameEntry(entry, bots.get(id)))) return;
       await this.stop();
       await this.start(bots);
       return;
     }
 
     for (const [appId, { entry, app }] of [...this.apps]) {
-      if (!bots.has(appId)) {
-        await this.stopApp(entry, app);
+      if (!sameEntry(entry, bots.get(appId))) {
         this.apps.delete(appId);
+        await this.stopApp(entry, app);
       }
     }
     for (const [appId, entry] of bots) {
@@ -154,9 +164,14 @@ export class BotPool {
     return this.apps.get(appId)?.app;
   }
 
+  ownerOf(appId: string): string | undefined {
+    return this.apps.get(appId)?.entry.participantId;
+  }
+
   async stop(): Promise<void> {
     for (const { entry, app } of this.apps.values()) await this.stopApp(entry, app);
     this.apps.clear();
+    this.httpDirectory = undefined;
     if (this.server) {
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));
       this.server = undefined;

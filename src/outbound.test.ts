@@ -15,12 +15,28 @@ function setup(participants: Array<Record<string, unknown>>, conversations: Reco
     get: (id: string) => participants.find((p) => p.id === id),
   } as unknown as CollectiveLike;
   const apps = {
+    ownerOf: (appId: string) => appId === 'app' ? 'assistant' : undefined,
     getByAppId: (appId: string) => (appId === 'app' ? { send, api: { conversations: { create } } } : undefined),
   };
   return { state, send, create, save, collective, apps };
 }
 
 describe('deliverMessage', () => {
+  it('prefers the exact route and otherwise picks the most recently updated fallback', async () => {
+    const s = setup([{ id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] }], {
+      'app:alice:aad-9': { conversationId: 'newer', updatedAt: '2026-11-21T00:00:00Z' },
+      'app:alice:aad-8': { conversationId: 'older', updatedAt: '2026-11-20T00:00:00Z' },
+      'app:alice-two:aad-1': { conversationId: 'unrelated', updatedAt: '2026-11-22T00:00:00Z' },
+    });
+    const deps = { ...s, state: s.state as never, stateStore: { save: s.save } as never, options: resolveOptions({}) };
+    const message = { senderId: 'assistant', recipientId: 'alice', content: 'hello' };
+    await deliverMessage(deps, message);
+    expect(s.send).toHaveBeenLastCalledWith('newer', expect.objectContaining({ text: 'hello' }));
+    s.state.conversations['app:alice'] = { conversationId: 'exact', updatedAt: '2026-11-19T00:00:00Z' };
+    await deliverMessage(deps, message);
+    expect(s.send).toHaveBeenLastCalledWith('exact', expect.objectContaining({ text: 'hello' }));
+    expect(s.create).not.toHaveBeenCalled();
+  });
   it('sends through the sender bot to a stored conversation', async () => {
     const s = setup(
       [

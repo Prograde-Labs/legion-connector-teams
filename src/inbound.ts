@@ -3,10 +3,12 @@ import type { ConnectorContext } from '@legion-collective/core';
 import type { CollectiveLike } from './directory.js';
 import { MessageActivityInput, TypingActivityInput } from '@microsoft/teams.api';
 import { handleCommand } from './commands.js';
+import { isAwaitingApproval } from './approvals.js';
 import { runCommunicate, type TeamsStreamer } from './communicate.js';
 import type { BotEntry } from './directory.js';
-import { resolveIdentity } from './identity.js';
+import { readTeamsId, resolveIdentity } from './identity.js';
 import type { ResolvedOptions } from './options.js';
+import { sendText } from './render.js';
 import type { StateStore, TeamsState } from './state.js';
 
 export interface TeamsActivity {
@@ -23,6 +25,12 @@ export interface TeamsContextLike {
   send: (activity: MessageActivityInput | TypingActivityInput | string) => Promise<unknown>;
   stream?: TeamsStreamer;
 }
+
+export function isBotTenant(bot: BotEntry, activity: TeamsActivity): boolean {
+  return activity.channelData?.tenant?.id === bot.credentials.tenantId;
+}
+
+export const tenantMismatchText = 'This bot is not available in your tenant.';
 
 export interface InboundDeps {
   bot: BotEntry;
@@ -49,13 +57,12 @@ export function provisionedUserId(name: string, aadObjectId: string): string {
 
 function upsertConversation(
   state: TeamsState,
-  bot: BotEntry,
-  userId: string,
+  key: string,
   aadObjectId: string,
   displayName: string | undefined,
   activity: TeamsActivity,
 ): void {
-  state.conversations[`${bot.appId}:${userId}`] = {
+  state.conversations[key] = {
     conversationId: activity.conversation?.id ?? '',
     tenantId: activity.channelData?.tenant?.id,
     serviceUrl: activity.serviceUrl,
@@ -69,35 +76,36 @@ async function autoProvision(
   deps: InboundDeps,
   aadObjectId: string,
   displayName: string | undefined,
-  context: TeamsContextLike,
+  reply: (text: string) => Promise<void>,
 ): Promise<void> {
   const name = displayName ?? 'Teams user';
   const id = provisionedUserId(name, aadObjectId);
   const existing = deps.collective.get(id);
 
-  if (existing && (existing.type !== 'user' || existing.identities?.some(
+  if (existing && (existing.type !== 'user' || existing.status === 'retired' || existing.identities?.some(
     (identity) => identity.connector === 'teams' && identity.externalId !== aadObjectId,
   ))) {
-    await context.send(`Participant ${id} is already in use; ask an administrator to pair you.`);
+    await reply(`Participant ${id} is already in use; ask an administrator to pair you.`);
     return;
   }
 
-  if (!existing) {
-    let created;
-    try {
-      created = await deps.ctx.callTool(deps.options.provisionerId, 'create_user', { id, name });
-    } catch (error) {
-      await context.send(`Provisioning failed: ${error instanceof Error ? error.message : String(error)}`);
-      return;
-    }
-    if (created.result.status === 'pending_approval') {
-      await context.send('Provisioning approval is pending.');
-      return;
-    }
-    if (created.result.status !== 'success') {
-      await context.send(`Provisioning failed: ${created.result.error ?? created.result.status}`);
-      return;
-    }
+  let provisioned;
+  const tools = { ...existing?.tools, communicate: 'auto', approval_response: 'auto' };
+  try {
+    provisioned = existing
+      ? await deps.ctx.callTool(deps.options.provisionerId, 'modify_user', { id, tools })
+      : await deps.ctx.callTool(deps.options.provisionerId, 'create_user', { id, name, tools });
+  } catch (error) {
+    await reply(`Provisioning failed: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (isAwaitingApproval(provisioned.result)) {
+    await reply('Provisioning approval is pending.');
+    return;
+  }
+  if (provisioned.result.status !== 'success') {
+    await reply(`Provisioning failed: ${provisioned.result.error ?? provisioned.result.status}`);
+    return;
   }
 
   let paired;
@@ -108,19 +116,19 @@ async function autoProvision(
       { participantId: id, connector: 'teams', externalId: aadObjectId },
     );
   } catch (error) {
-    await context.send(`Pairing failed: ${error instanceof Error ? error.message : String(error)}`);
+    await reply(`Pairing failed: ${error instanceof Error ? error.message : String(error)}`);
     return;
   }
-  if (paired.result.status === 'pending_approval') {
-    await context.send('Pairing approval is pending.');
+  if (isAwaitingApproval(paired.result)) {
+    await reply('Pairing approval is pending.');
     return;
   }
   if (paired.result.status !== 'success') {
-    await context.send(`Pairing failed: ${paired.result.error ?? paired.result.status}`);
+    await reply(`Pairing failed: ${paired.result.error ?? paired.result.status}`);
     return;
   }
 
-  await context.send(`Welcome, ${name}. You are now paired as ${id}.`);
+  await reply(`Welcome, ${name}. You are now paired as ${id}.`);
 }
 
 export async function handleInbound(
@@ -128,9 +136,18 @@ export async function handleInbound(
   context: TeamsContextLike,
 ): Promise<void> {
   const activity = context.activity;
-  const aadObjectId = activity.from?.aadObjectId?.trim() || activity.from?.id?.trim();
+  const reply = (text: string) => sendText((message) => context.send(message), deps.options.aiLabel, text);
+  if (activity.conversation?.conversationType !== 'personal') {
+    await reply('Only personal chats are supported.');
+    return;
+  }
+  if (!isBotTenant(deps.bot, activity)) {
+    await reply(tenantMismatchText);
+    return;
+  }
+  const aadObjectId = readTeamsId(activity.from);
   if (!aadObjectId) {
-    await context.send('Unable to read your Teams identity.');
+    await reply('Unable to read your Teams identity.');
     return;
   }
 
@@ -145,31 +162,32 @@ export async function handleInbound(
 
   switch (outcome.kind) {
     case 'pairing':
-      await context.send(
+      await deps.stateStore.save(deps.state);
+      await reply(
         `Not registered with Legion yet. Ask someone with the \`pair\` tool to run ` +
         `/pair ${outcome.code} <participant-id>. Your Teams ID: ${outcome.aadObjectId}.`,
       );
-      await deps.stateStore.save(deps.state);
       return;
 
     case 'reject':
-      await context.send(
+      await reply(
         `Not registered with Legion yet. Your Teams ID: ${outcome.aadObjectId}. Ask an administrator to register you.`,
       );
       return;
 
     case 'auto-provision':
-      await autoProvision(deps, outcome.aadObjectId, outcome.displayName, context);
+      await autoProvision(deps, outcome.aadObjectId, outcome.displayName, reply);
       await deps.stateStore.save(deps.state);
       return;
 
     case 'resolved':
     case 'fallback': {
       const user = outcome.user;
+      const key = `${deps.bot.appId}:${user.participantId}` +
+        (outcome.kind === 'fallback' ? `:${user.aadObjectId}` : '');
       upsertConversation(
         deps.state,
-        deps.bot,
-        user.participantId,
+        key,
         user.aadObjectId,
         user.displayName,
         activity,
@@ -179,7 +197,7 @@ export async function handleInbound(
 
       const text = activity.text?.trim();
       if (!text) {
-        await context.send('Empty message.');
+        await reply('Empty message.');
         return;
       }
 
@@ -188,11 +206,13 @@ export async function handleInbound(
           appId: deps.bot.appId,
           participantId: user.participantId,
           aadObjectId: user.aadObjectId,
+          conversationKey: key,
+          isFallback: outcome.kind === 'fallback',
           text,
           state: deps.state,
           ctx: deps.ctx,
           options: deps.options,
-          send: async (value) => { await context.send(value); },
+          send: reply,
         });
         if (handled) {
           await deps.stateStore.save(deps.state);
@@ -213,14 +233,12 @@ export async function handleInbound(
           userId: user.participantId,
           botOwnerId: deps.bot.participantId,
           text,
-          conversationId:
-            deps.state.legionConversations[`${deps.bot.appId}:${user.participantId}`],
+          conversationId: deps.state.legionConversations[key],
           options: deps.options,
           stream: context.stream,
           send: (activity) => context.send(activity),
         });
-        deps.state.legionConversations[`${deps.bot.appId}:${user.participantId}`] =
-          conversationId;
+        deps.state.legionConversations[key] = conversationId;
         await deps.stateStore.save(deps.state);
       } finally {
         if (typing) clearInterval(typing);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/provision-teams-bot.mjs
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 const COLOR_PNG =
@@ -9,7 +9,7 @@ const COLOR_PNG =
 const OUTLINE_PNG =
   'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR42u3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4tnPBf0AAAAASUVORK5CYII=';
 
-const usage = 'Usage: provision-teams-bot.mjs --participant <id> --base-url <url>';
+const usage = 'Usage: provision-teams-bot.mjs --participant <id> --base-url <url> [--force] [--dry-run]';
 for (let i = 2; i < process.argv.length; i++) {
   if (['--participant', '--base-url', '--env', '--workspace', '--legion-url', '--legion-password'].includes(process.argv[i])) {
     const value = process.argv[i + 1];
@@ -38,26 +38,53 @@ const envFile = resolve(arg('env', join(workspace, '.env.teams')));
 const legionUrl = arg('legion-url', 'http://127.0.0.1:3000');
 const legionPassword = arg('legion-password', process.env.LEGION_BOOTSTRAP_PASSWORD);
 const dryRun = process.argv.includes('--dry-run');
+const force = process.argv.includes('--force');
 
 const participantPath = join(workspace, '.legion/collective/participants', `${participantId}.json`);
 const participant = JSON.parse(await readFile(participantPath, 'utf8'));
+const previous = participant.identities?.find((identity) => identity.connector === 'teams-bot');
+const reuse = Boolean(previous && !force);
 const endpoint = `${baseUrl.replace(/\/$/, '')}/teams/${participantId}/api/messages`;
+
+if (reuse) {
+  if (!dryRun && (!previous.externalId?.trim() || /^<.*>$/.test(previous.externalId))) {
+    throw new Error('Existing teams-bot identity is a placeholder; use --force to replace it.');
+  }
+  console.log(`Reusing Teams app ${previous.externalId}; skipping teams app create.`);
+} else {
+  console.log(`${dryRun ? 'Would create' : 'Creating'} a Teams app${previous ? ' to replace the existing identity (--force)' : ''}.`);
+}
 
 if (!dryRun) {
   const zipCheck = spawnSync('zip', ['-v'], { stdio: 'ignore' });
   if (zipCheck.error || zipCheck.status !== 0) {
     throw new Error('zip is required; install the zip command before provisioning');
   }
-  execFileSync('teams', [
-    'app', 'create',
-    '--name', participant.name,
-    '--endpoint', endpoint,
-    '--env', envFile,
-  ], { stdio: 'inherit' });
+}
+
+async function protectEnvFile() {
+  await chmod(envFile, 0o600).catch((error) => {
+    if (error.code !== 'ENOENT') throw error;
+  });
 }
 
 const env = {};
-if (!dryRun) {
+if (!dryRun && !reuse) {
+  await protectEnvFile();
+  const mask = process.umask(0o077);
+  try {
+    execFileSync('teams', [
+      'app', 'create',
+      '--name', participant.name,
+      '--endpoint', endpoint,
+      '--env', envFile,
+    ], { stdio: ['inherit', 'ignore', 'ignore'] });
+  } catch {
+    throw new Error(`teams app create failed; check Teams and ${envFile} before retrying.`);
+  } finally {
+    process.umask(mask);
+    await protectEnvFile();
+  }
   for (const line of (await readFile(envFile, 'utf8')).split(/\r?\n/)) {
     const match = line.match(/^\s*([A-Z0-9_]+)\s*=(.*)$/);
     if (match) {
@@ -68,17 +95,13 @@ if (!dryRun) {
       env[match[1]] = value;
     }
   }
-}
-if (!dryRun) {
   const invalid = ['CLIENT_ID', 'CLIENT_SECRET', 'TENANT_ID'].filter((key) => {
     const value = env[key]?.trim();
     return !value || /^<.*>$/.test(value);
   });
   if (invalid.length) throw new Error(`Missing or invalid ${invalid.join(', ')} in ${envFile}`);
 }
-const appId = env.CLIENT_ID ?? '<app-id>';
-const clientSecret = env.CLIENT_SECRET ?? '<client-secret>';
-const tenantId = env.TENANT_ID ?? '<tenant-id>';
+const appId = reuse ? previous.externalId : env.CLIENT_ID ?? '<app-id>';
 
 const manifest = {
   $schema: 'https://developer.microsoft.com/en-us/json-schemas/teams/v1.19/MicrosoftTeams.schema.json',
@@ -114,7 +137,27 @@ if (!dryRun) {
   execFileSync('zip', ['-j', join(outDir, `${participantId}.zip`), 'manifest.json', 'color.png', 'outline.png'], { cwd: outDir, stdio: 'inherit' });
 }
 
-if (!dryRun) {
+async function execute(token, tool, args) {
+  const response = await fetch(`${legionUrl}/api/execute?stream=false`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ tool, args }),
+  });
+  if (!response.ok) throw new Error(`${tool} failed (HTTP ${response.status})`);
+  const { result } = (await response.json().catch(() => ({}))) ?? {};
+  if (result?.status !== 'success') throw new Error(`${tool} did not succeed`);
+}
+
+const botIdentity = { connector: 'teams-bot', externalId: appId };
+async function replaceBotIdentity(current) {
+  const identities = current.identities ?? [];
+  current.identities = [...identities.filter((identity) => identity.connector !== 'teams-bot'), botIdentity];
+  await writeFile(participantPath, JSON.stringify(current, null, 2));
+}
+
+if (dryRun) {
+  if (!reuse) await replaceBotIdentity(participant);
+} else {
   try {
     const login = await fetch(`${legionUrl}/api/auth/login`, {
       method: 'POST',
@@ -124,41 +167,27 @@ if (!dryRun) {
     const loginBody = (await login.json().catch(() => ({}))) ?? {};
     const { token } = loginBody;
     if (!login.ok || typeof token !== 'string' || !token.trim()) {
-      throw new Error(`Legion login failed: ${loginBody.error ?? login.status}`);
+      throw new Error(`Legion login failed (HTTP ${login.status})`);
     }
-    const response = await fetch(`${legionUrl}/api/execute?stream=false`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token.trim()}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        tool: 'set_secret',
-        args: {
-          participantId,
-          key: `teams-bot/${appId}`,
-          secret: JSON.stringify({ appId, clientSecret, tenantId }),
-        },
-      }),
-    });
-    if (!response.ok) throw new Error(`set_secret failed: ${response.status}`);
-    const { result } = (await response.json());
-    if (result?.status !== 'success') {
-      throw new Error(`set_secret failed: ${result?.error ?? result?.status ?? 'unknown'}`);
+    if (!reuse) {
+      await execute(token.trim(), 'set_secret', {
+        participantId,
+        key: `teams-bot/${appId}`,
+        secret: JSON.stringify({ appId, clientSecret: env.CLIENT_SECRET, tenantId: env.TENANT_ID }),
+      });
     }
+    await execute(token.trim(), 'pair', { participantId, ...botIdentity });
   } catch (error) {
-    console.error(`Teams app ${appId} was created; credentials are in ${envFile}. Manually add the teams-bot identity and store the secret for this app ID, or delete the app in Teams before rerunning provisioning.`);
+    if (!reuse) console.error(`Teams app ${appId} was created; credentials are in ${envFile}. Store the secret and pair this app ID manually, or delete the app in Teams before retrying.`);
     throw error;
   }
-}
-
-const botIdentity = { connector: 'teams-bot', externalId: appId };
-const identities = participant.identities ?? [];
-if (!identities.some((i) => i.connector === botIdentity.connector && i.externalId === botIdentity.externalId)) {
-  participant.identities = [...identities, botIdentity];
-  await writeFile(participantPath, JSON.stringify(participant, null, 2));
-}
-
-if (!dryRun) {
+  if (force && previous) {
+    // The core pair tool only merges identities. Preserve any other changes it persisted.
+    await replaceBotIdentity(JSON.parse(await readFile(participantPath, 'utf8')));
+    console.log('Replaced the teams-bot identity in the participant file. Restart Legion or reconcile its collective to retire the old identity.');
+  }
   try {
-    const link = execFileSync('teams', ['app', 'get', appId, '--install-link'], { encoding: 'utf8' }).trim();
+    const link = execFileSync('teams', ['app', 'get', appId, '--install-link'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     console.log(`Install: ${link}`);
   } catch {
     console.error('Could not retrieve install link; run this command manually:');

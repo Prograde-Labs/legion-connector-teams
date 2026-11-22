@@ -40,7 +40,7 @@ function setup() {
           : null,
     },
   };
-  return { app, sent, deps };
+  return { app, sent, deps, participants };
 }
 
 describe('TeamsConnector', () => {
@@ -69,8 +69,8 @@ describe('TeamsConnector', () => {
     const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
     await connector.start({} as never);
     const [entry, handlers] = factory.mock.calls[0];
-    const context = (conversationType: string, id?: string) => ({
-      activity: { from: { aadObjectId: 'aad-1' }, conversation: { conversationType, id } },
+    const context = (conversationType: string, id?: string, tenant = 't') => ({
+      activity: { from: { aadObjectId: 'aad-1' }, conversation: { conversationType, id }, channelData: { tenant: { id: tenant } } },
     } as never);
     try {
       const record = async () => (await new StateStore(dir).load()).conversations['app:alice'];
@@ -81,7 +81,53 @@ describe('TeamsConnector', () => {
       expect(await record()).toEqual(personal);
       await handlers.onInstall(entry, context('personal'));
       expect(await record()).toEqual(personal);
+      await handlers.onInstall(entry, context('personal', 'wrong-tenant', 'other'));
+      expect(await record()).toEqual(personal);
     } finally { await connector.stop(); }
+  });
+
+  it('returns an Adaptive Card invoke response and rejects retired or foreign actors', async () => {
+    const { app, deps, participants } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-approval-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({ result: { status: 'success' } }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      const send = vi.fn();
+      const invoke = (id: string) => handlers.onApproval(entry, { send, activity: {
+        from: { aadObjectId: 'aad-1' }, channelData: { tenant: { id } },
+        value: { action: { data: { approvalId: 'ap-1' } } },
+      } } as never, 'approve');
+      expect(await invoke('other')).toHaveProperty('body.value', 'This bot is not available in your tenant.');
+      expect(await invoke('t')).toEqual({ status: 200, body: {
+        statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'Approval recorded.',
+      } });
+      participants[1].status = 'retired';
+      expect(await invoke('t')).toHaveProperty('body.value', 'Not registered.');
+      expect(callTool).toHaveBeenCalledOnce();
+      expect(callTool).toHaveBeenCalledWith('alice', 'approval_response', {
+        decisions: [{ approvalId: 'ap-1', decision: 'approve' }],
+      });
+      expect(send).not.toHaveBeenCalled();
+    } finally { await connector.stop(); }
+  });
+
+  it('does not route outbound from a duplicate-app loser through the winner', async () => {
+    const { app, deps, participants, sent } = setup();
+    participants.push({ ...participants[0], id: 'duplicate' });
+    const dir = await mkdtemp(join(tmpdir(), 'teams-duplicate-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, () => app);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await connector.start({} as never);
+      const message = { id: 'm1', conversationId: 'conv', recipientId: 'alice', content: 'hello', timestamp: 'now' };
+      await connector.deliver({ ...message, senderId: 'duplicate' });
+      expect(sent).toHaveLength(0);
+      await connector.deliver({ ...message, senderId: 'assistant' });
+      expect(sent).toHaveLength(1);
+    } finally { await connector.stop(); warn.mockRestore(); }
   });
 
   it('starts the pool and delivers outbound messages', async () => {
