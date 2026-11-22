@@ -1,7 +1,7 @@
 // src/bot-pool.ts
 import { createServer, type Server } from 'node:http';
 import express from 'express';
-import { App, ExpressAdapter } from '@microsoft/teams.apps';
+import { App, ExpressAdapter, type HttpMethod, type HttpRouteHandler } from '@microsoft/teams.apps';
 import type { AdaptiveCardActionMessageResponse } from '@microsoft/teams.api';
 import type { BotEntry } from './directory.js';
 import { describeError } from './errors.js';
@@ -38,6 +38,47 @@ export type TeamsAppFactory = (
   transport: TransportContext,
 ) => TeamsAppLike;
 
+const httpRoutes = new WeakMap<express.Express, Set<express.Router>>();
+
+function routesOn(sharedApp: express.Express): Set<express.Router> {
+  const existing = httpRoutes.get(sharedApp);
+  if (existing) return existing;
+
+  const routes = new Set<express.Router>();
+  sharedApp.use((req, res, next) => {
+    const remaining = routes.values();
+    function dispatch(error?: unknown): void {
+      if (error) return next(error);
+      const router = remaining.next().value;
+      if (router) router(req, res, dispatch);
+      else next();
+    }
+    dispatch();
+  });
+  httpRoutes.set(sharedApp, routes);
+  return routes;
+}
+
+// The SDK's stock adapter cannot unregister routes or stop an externally managed
+// server. Keep each bot's routes detachable without touching the shared listener.
+class BotExpressAdapter extends ExpressAdapter {
+  private readonly activeRoutes: Set<express.Router>;
+
+  constructor(sharedApp: express.Express) {
+    super(express());
+    this.activeRoutes = routesOn(sharedApp);
+  }
+
+  override registerRoute(method: HttpMethod, path: string, handler: HttpRouteHandler): void {
+    super.registerRoute(method, path, handler);
+    this.activeRoutes.add(this.express.router);
+  }
+
+  override async stop(): Promise<void> {
+    this.activeRoutes.delete(this.express.router);
+  }
+}
+
 export function defaultAppFactory(
   entry: BotEntry,
   handlers: AppHandlers,
@@ -48,7 +89,7 @@ export function defaultAppFactory(
         clientId: entry.credentials.appId,
         clientSecret: entry.credentials.clientSecret,
         tenantId: entry.credentials.tenantId,
-        httpServerAdapter: new ExpressAdapter(transport.expressApp),
+        httpServerAdapter: new BotExpressAdapter(transport.expressApp),
         messagingEndpoint: `/teams/${entry.participantId}/api/messages`,
       })
     : new App({
@@ -75,6 +116,7 @@ function sameEntry(current: BotEntry, next: BotEntry | undefined): boolean {
 
 export class BotPool {
   private readonly apps = new Map<string, { entry: BotEntry; app: TeamsAppLike }>();
+  private expressApp?: express.Express;
   private server?: Server;
 
   constructor(
@@ -109,44 +151,40 @@ export class BotPool {
   }
 
   async start(bots: Map<string, BotEntry>): Promise<void> {
-    if (this.options.transport === 'http') {
-      const expressApp = express();
-      expressApp.get('/health', (_req, res) => res.sendStatus(200));
-      const server = createServer(expressApp);
-      for (const entry of bots.values()) {
-        await this.add(entry, { kind: 'http', expressApp });
-      }
-      try {
-        await new Promise<void>((resolve, reject) => {
-          server.once('error', reject);
-          server.listen(this.options.port, '0.0.0.0', () => {
-            server.off('error', reject);
-            resolve();
-          });
-        });
-      } catch (error) {
-        await this.stop();
-        throw error;
-      }
-      this.server = server;
-      return;
-    }
+    await this.reconcile(bots);
+  }
 
-    for (const entry of bots.values()) {
-      await this.add(entry, { kind: 'socket', geos: this.options.socketGeos });
+  private transportContext(): TransportContext {
+    if (this.options.transport === 'socket') {
+      return { kind: 'socket', geos: this.options.socketGeos };
     }
+    if (!this.expressApp) {
+      this.expressApp = express();
+      this.expressApp.get('/health', (_req, res) => res.sendStatus(200));
+    }
+    return { kind: 'http', expressApp: this.expressApp };
+  }
+
+  private async listen(expressApp: express.Express): Promise<void> {
+    if (this.server?.listening) return;
+    const server = this.server ?? createServer(expressApp);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(this.options.port, '0.0.0.0', () => {
+          server.off('error', reject);
+          resolve();
+        });
+      });
+    } catch (error) {
+      if (!this.server) await this.stop();
+      throw error;
+    }
+    this.server = server;
   }
 
   async reconcile(bots: Map<string, BotEntry>): Promise<void> {
-    if (this.options.transport === 'http') {
-      // Only initialized apps are in this.apps, so a failed bot forces a retry.
-      if (this.server && this.apps.size === bots.size &&
-          [...this.apps].every(([id, { entry }]) => sameEntry(entry, bots.get(id)))) return;
-      await this.stop();
-      await this.start(bots);
-      return;
-    }
-
+    const transport = this.transportContext();
     for (const [appId, { entry, app }] of [...this.apps]) {
       if (!sameEntry(entry, bots.get(appId))) {
         this.apps.delete(appId);
@@ -155,8 +193,9 @@ export class BotPool {
     }
     for (const [appId, entry] of bots) {
       if (this.apps.has(appId)) continue;
-      await this.add(entry, { kind: 'socket', geos: this.options.socketGeos });
+      await this.add(entry, transport);
     }
+    if (transport.kind === 'http') await this.listen(transport.expressApp);
   }
 
   getByAppId(appId: string): TeamsAppLike | undefined {
@@ -174,5 +213,6 @@ export class BotPool {
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));
       this.server = undefined;
     }
+    this.expressApp = undefined;
   }
 }

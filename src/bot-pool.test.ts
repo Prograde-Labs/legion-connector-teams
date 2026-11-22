@@ -73,22 +73,94 @@ describe('BotPool', () => {
   it.each(['construct', 'initialize'])('retries an unchanged HTTP bot after a %s failure', async (operation) => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const fail = () => { throw new Error('bot unavailable'); };
-    const factory = vi.fn(fakeApp).mockImplementationOnce(() =>
-      operation === 'construct' ? fail() : { ...fakeApp(), initialize: fail },
-    );
+    const a = fakeApp();
+    const b = fakeApp();
+    const createB = vi.fn(() => b).mockImplementationOnce(() =>
+      operation === 'construct' ? fail() : { ...fakeApp(), initialize: fail });
+    const factory = vi.fn(({ appId }: BotEntry) => appId === 'a' ? a : createB());
     const pool = new BotPool(resolveOptions({ transport: 'http', port: 0 }), factory, handlers);
-    const directory = () => new Map([['a', bot('assistant', 'a')]]);
+    const directory = () => new Map([['a', bot('a', 'a')], ['b', bot('b', 'b')]]);
+    try {
+      await pool.start(new Map([['a', bot('a', 'a')]]));
+      const server = pool['server']!;
+      const { port } = server.address() as AddressInfo;
+      const health = `http://127.0.0.1:${port}/health`;
+      expect((await fetch(health)).status).toBe(200);
+
+      await pool.reconcile(directory());
+      expect(createB).toHaveBeenCalledTimes(1);
+      expect(pool.getByAppId('b')).toBeUndefined();
+      expect(pool['server']).toBe(server);
+      expect((await fetch(health)).status).toBe(200);
+
+      await pool.reconcile(directory());
+      expect(createB).toHaveBeenCalledTimes(2);
+      expect(pool.getByAppId('b')).toBe(b);
+      expect(b.initialized).toBe(1);
+      expect(pool.getByAppId('a')).toBe(a);
+      expect(a.initialized).toBe(1);
+      expect(a.stopped).toBe(0);
+      expect(pool['server']).toBe(server);
+      expect((await fetch(health)).status).toBe(200);
+    } finally { await pool.stop(); log.mockRestore(); }
+  });
+
+  it('stops only the removed HTTP bot', async () => {
+    const a = fakeApp();
+    const b = fakeApp();
+    const pool = new BotPool(resolveOptions({ port: 0 }), ({ appId }) => appId === 'a' ? a : b, handlers);
+    try {
+      await pool.start(new Map([['a', bot('a', 'a')], ['b', bot('b', 'b')]]));
+      const server = pool['server'];
+
+      await pool.reconcile(new Map([['a', bot('a', 'a')]]));
+
+      expect(b.stopped).toBe(1);
+      expect(pool.getByAppId('b')).toBeUndefined();
+      expect(a.stopped).toBe(0);
+      expect(a.initialized).toBe(1);
+      expect(pool.getByAppId('a')).toBe(a);
+      expect(pool['server']).toBe(server);
+    } finally { await pool.stop(); }
+  });
+
+  it('removes the old SDK route when an HTTP bot changes participant', async () => {
+    const pool = new BotPool(resolveOptions({ port: 0 }), defaultAppFactory, handlers);
+    try {
+      await pool.start(new Map([['app', bot('old', 'app')]]));
+      const { port } = pool['server']!.address() as AddressInfo;
+      const send = (participant: string) => fetch(`http://127.0.0.1:${port}/teams/${participant}/api/messages`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      });
+      expect((await send('old')).status).toBe(401);
+
+      await pool.reconcile(new Map([['app', bot('new', 'app')]]));
+
+      expect(pool.ownerOf('app')).toBe('new');
+      expect((await send('old')).status).toBe(404);
+      expect((await send('new')).status).toBe(401);
+    } finally { await pool.stop(); }
+  });
+
+  it('does nothing when the healthy HTTP directory is unchanged', async () => {
+    const factory = vi.fn(fakeApp);
+    const pool = new BotPool(resolveOptions({ port: 0 }), factory, handlers);
+    const directory = () => new Map([['a', bot('a', 'a')], ['b', bot('b', 'b')]]);
     try {
       await pool.start(directory());
-      expect(pool.getByAppId('a')).toBeUndefined();
+      const server = pool['server'];
+
       await pool.reconcile(directory());
-      const app = factory.mock.results[1]?.value;
-      expect(app?.initialized).toBe(1);
-      expect(pool.getByAppId('a')).toBe(app);
-      await pool.reconcile(directory());
+
       expect(factory).toHaveBeenCalledTimes(2);
-      expect(pool.getByAppId('a')).toBe(app);
-    } finally { await pool.stop(); log.mockRestore(); }
+      for (const [index, id] of ['a', 'b'].entries()) {
+        const app = factory.mock.results[index].value;
+        expect(pool.getByAppId(id)).toBe(app);
+        expect(app.initialized).toBe(1);
+        expect(app.stopped).toBe(0);
+      }
+      expect(pool['server']).toBe(server);
+    } finally { await pool.stop(); }
   });
 
   it.each(['construct', 'stop'])('redacts the bot client secret in %s diagnostics', async operation => {
