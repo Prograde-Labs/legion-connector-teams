@@ -76,7 +76,6 @@ function sameEntry(current: BotEntry, next: BotEntry | undefined): boolean {
 export class BotPool {
   private readonly apps = new Map<string, { entry: BotEntry; app: TeamsAppLike }>();
   private server?: Server;
-  private httpDirectory?: Map<string, BotEntry>;
 
   constructor(
     private readonly options: ResolvedOptions,
@@ -130,7 +129,6 @@ export class BotPool {
         throw error;
       }
       this.server = server;
-      this.httpDirectory = new Map(bots);
       return;
     }
 
@@ -141,8 +139,9 @@ export class BotPool {
 
   async reconcile(bots: Map<string, BotEntry>): Promise<void> {
     if (this.options.transport === 'http') {
-      if (this.httpDirectory?.size === bots.size &&
-          [...this.httpDirectory].every(([id, entry]) => sameEntry(entry, bots.get(id)))) return;
+      // Only initialized apps are in this.apps, so a failed bot forces a retry.
+      if (this.server && this.apps.size === bots.size &&
+          [...this.apps].every(([id, { entry }]) => sameEntry(entry, bots.get(id)))) return;
       await this.stop();
       await this.start(bots);
       return;
@@ -171,7 +170,6 @@ export class BotPool {
   async stop(): Promise<void> {
     for (const { entry, app } of this.apps.values()) await this.stopApp(entry, app);
     this.apps.clear();
-    this.httpDirectory = undefined;
     if (this.server) {
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));
       this.server = undefined;

@@ -38,38 +38,37 @@ export async function deliverMessage(
   let record = deps.state.conversations[key];
 
   if (!record) {
-    for (const [candidateKey, candidate] of Object.entries(deps.state.conversations)) {
-      if (candidateKey.startsWith(`${key}:`) && (!record || candidate.updatedAt > record.updatedAt)) {
-        record = candidate;
+    const recipient = deps.collective.get(message.recipientId);
+    const userIdentity = recipient?.identities?.find((i) => i.connector === 'teams');
+    if (userIdentity) {
+      let conversation: { id: string };
+      try {
+        conversation = await app.api.conversations.create({
+          members: [{ id: userIdentity.externalId }],
+          tenantId: deps.options.tenantId,
+          channelData: { tenant: { id: deps.options.tenantId } },
+        });
+      } catch (error) {
+        console.error('Teams conversation creation failed', describeError(error));
+        return;
+      }
+      record = {
+        conversationId: conversation.id,
+        tenantId: deps.options.tenantId,
+        aadObjectId: userIdentity.externalId,
+        updatedAt: new Date().toISOString(),
+      };
+      deps.state.conversations[key] = record;
+      await deps.stateStore.save(deps.state);
+    } else {
+      for (const [candidateKey, candidate] of Object.entries(deps.state.conversations)) {
+        if (candidateKey.startsWith(`${key}:`) && (!record || candidate.updatedAt > record.updatedAt)) {
+          record = candidate;
+        }
       }
     }
   }
-
-  if (!record) {
-    const recipient = deps.collective.get(message.recipientId);
-    const userIdentity = recipient?.identities?.find((i) => i.connector === 'teams');
-    if (!userIdentity) return;
-
-    let conversation: { id: string };
-    try {
-      conversation = await app.api.conversations.create({
-        members: [{ id: userIdentity.externalId }],
-        tenantId: deps.options.tenantId,
-        channelData: { tenant: { id: deps.options.tenantId } },
-      });
-    } catch (error) {
-      console.error('Teams conversation creation failed', describeError(error));
-      return;
-    }
-    record = {
-      conversationId: conversation.id,
-      tenantId: deps.options.tenantId,
-      aadObjectId: userIdentity.externalId,
-      updatedAt: new Date().toISOString(),
-    };
-    deps.state.conversations[key] = record;
-    await deps.stateStore.save(deps.state);
-  }
+  if (!record) return;
 
   for (const chunk of chunkMarkdown(message.content, deps.options.maxMessageChars)) {
     const activity = new MessageActivityInput(chunk);

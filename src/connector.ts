@@ -116,6 +116,9 @@ export class TeamsConnector implements Connector {
   ): Promise<CardInvokeResponse> {
     if (!this.ctx) return approvalResponse('This bot is not available.');
     if (!isBotTenant(bot, context.activity)) return approvalResponse(tenantMismatchText);
+    if (context.activity.conversation?.conversationType !== 'personal') {
+      return approvalResponse('Only personal chats are supported.');
+    }
     const aadObjectId = readTeamsId(context.activity.from);
     const participant = aadObjectId ? findTeamsActor(this.deps.collective, aadObjectId) : undefined;
     if (!participant) return approvalResponse('Not registered.');

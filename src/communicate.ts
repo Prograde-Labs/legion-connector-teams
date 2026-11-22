@@ -4,6 +4,8 @@ import { MessageActivityInput } from '@microsoft/teams.api';
 import type { ResolvedOptions } from './options.js';
 import { approvalCard, sendText, toolCard, type ApprovalRequest } from './render.js';
 
+const MAX_TOOL_CARD_ARGS = 500;
+
 export interface TeamsStreamer {
   emit(activity: MessageActivityInput | string): void;
   update(text: string): void;
@@ -24,7 +26,7 @@ export interface CommunicateDeps {
 
 export async function runCommunicate(deps: CommunicateDeps): Promise<{
   result: ToolResult;
-  conversationId: string;
+  conversationId: string | undefined;
 }> {
   const { gen, conversationId } = await deps.ctx.streamTool(deps.userId, 'communicate', {
     to: deps.botOwnerId,
@@ -42,13 +44,23 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
   const reply = (text: string) => sendText(deps.send, deps.options.aiLabel, text);
   const tools = new Map<number, { name: string; args: string; displayedArgs?: string; activityId?: string }>();
 
+  async function sendCard(card: MessageActivityInput): Promise<{ id?: string } | undefined> {
+    try {
+      return await deps.send(card) as { id?: string } | undefined;
+    } catch {
+      // SDK errors may include credentials or the card payload. Do not log them.
+      console.error(card.id ? 'Teams card update failed' : 'Teams card send failed');
+      return undefined;
+    }
+  }
+
   async function refreshToolCards(): Promise<void> {
     for (const tool of tools.values()) {
       if (tool.displayedArgs === tool.args) continue;
       const card = new MessageActivityInput().addCard('adaptive', toolCard(tool.name, tool.args));
       // Sending with a known ID updates the existing Teams activity.
       if (tool.activityId) card.id = tool.activityId;
-      const sent = await deps.send(card) as { id?: string } | undefined;
+      const sent = await sendCard(card);
       tool.activityId = sent?.id ?? tool.activityId;
       tool.displayedArgs = tool.args;
     }
@@ -78,15 +90,15 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
           deps.stream?.update(`Calling ${chunk.name}…`);
         } else if (deps.options.toolDisplay === 'cards') {
           await refreshToolCards();
-          const sent = await deps.send(
+          const sent = await sendCard(
             new MessageActivityInput().addCard('adaptive', toolCard(chunk.name, '(args pending)')),
-          ) as { id?: string } | undefined;
+          );
           tools.set(chunk.index, { name: chunk.name, args: '', activityId: sent?.id });
         }
         break;
       case 'tool_call_args_delta': {
         const tool = tools.get(chunk.index);
-        if (tool) tool.args += chunk.delta;
+        if (tool) tool.args += chunk.delta.slice(0, MAX_TOOL_CARD_ARGS - tool.args.length);
         break;
       }
       case 'call_timeout':
@@ -130,13 +142,13 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
     response?: unknown;
     approvalRequests?: ApprovalRequest[];
   } | undefined;
-  if (!buffer && final?.status === 'success' && typeof data?.response === 'string') {
+  if (!buffer && typeof data?.response === 'string') {
     await reply(data.response);
   }
 
   if (final?.status === 'pending_approval') {
     for (const approval of data?.approvalRequests ?? []) {
-      await deps.send(new MessageActivityInput().addCard('adaptive', approvalCard(approval)));
+      await sendCard(new MessageActivityInput().addCard('adaptive', approvalCard(approval)));
     }
   } else if (final?.status === 'error' && !errorSent) {
     await reply(`Error: ${final.error ?? 'unknown error'}`);
@@ -146,6 +158,8 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
 
   return {
     result: final ?? { status: 'success' },
-    conversationId: typeof data?.conversationId === 'string' ? data.conversationId : conversationId,
+    conversationId: typeof data?.conversationId === 'string'
+      ? data.conversationId
+      : final?.status === 'error' ? undefined : conversationId,
   };
 }

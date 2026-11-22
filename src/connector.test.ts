@@ -86,7 +86,7 @@ describe('TeamsConnector', () => {
     } finally { await connector.stop(); }
   });
 
-  it('returns an Adaptive Card invoke response and rejects retired or foreign actors', async () => {
+  it('returns an Adaptive Card invoke response and rejects non-personal chats, retired or foreign actors', async () => {
     const { app, deps, participants } = setup();
     const factory = vi.fn<TeamsAppFactory>(() => app);
     const dir = await mkdtemp(join(tmpdir(), 'teams-approval-'));
@@ -96,11 +96,14 @@ describe('TeamsConnector', () => {
     try {
       const [entry, handlers] = factory.mock.calls[0];
       const send = vi.fn();
-      const invoke = (id: string) => handlers.onApproval(entry, { send, activity: {
+      const invoke = (id: string, conversationType = 'personal') => handlers.onApproval(entry, { send, activity: {
         from: { aadObjectId: 'aad-1' }, channelData: { tenant: { id } },
+        conversation: { conversationType },
         value: { action: { data: { approvalId: 'ap-1' } } },
       } } as never, 'approve');
       expect(await invoke('other')).toHaveProperty('body.value', 'This bot is not available in your tenant.');
+      expect(await invoke('t', 'groupChat')).toHaveProperty('body.value', 'Only personal chats are supported.');
+      expect(callTool).not.toHaveBeenCalled();
       expect(await invoke('t')).toEqual({ status: 200, body: {
         statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'Approval recorded.',
       } });

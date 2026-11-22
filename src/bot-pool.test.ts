@@ -70,6 +70,27 @@ describe('BotPool', () => {
       expect(pool.ownerOf('app')).toBe('assistant');
     } finally { await pool.stop(); }
   });
+  it.each(['construct', 'initialize'])('retries an unchanged HTTP bot after a %s failure', async (operation) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fail = () => { throw new Error('bot unavailable'); };
+    const factory = vi.fn(fakeApp).mockImplementationOnce(() =>
+      operation === 'construct' ? fail() : { ...fakeApp(), initialize: fail },
+    );
+    const pool = new BotPool(resolveOptions({ transport: 'http', port: 0 }), factory, handlers);
+    const directory = () => new Map([['a', bot('assistant', 'a')]]);
+    try {
+      await pool.start(directory());
+      expect(pool.getByAppId('a')).toBeUndefined();
+      await pool.reconcile(directory());
+      const app = factory.mock.results[1]?.value;
+      expect(app?.initialized).toBe(1);
+      expect(pool.getByAppId('a')).toBe(app);
+      await pool.reconcile(directory());
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(pool.getByAppId('a')).toBe(app);
+    } finally { await pool.stop(); log.mockRestore(); }
+  });
+
   it.each(['construct', 'stop'])('redacts the bot client secret in %s diagnostics', async operation => {
     const entry = bot('assistant', 'app');
     entry.credentials.clientSecret = 'super-secret';

@@ -24,8 +24,9 @@ function setup(participants: Array<Record<string, unknown>>, conversations: Reco
 describe('deliverMessage', () => {
   it('prefers the exact route and otherwise picks the most recently updated fallback', async () => {
     const s = setup([{ id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] }], {
-      'app:alice:aad-9': { conversationId: 'newer', updatedAt: '2026-11-21T00:00:00Z' },
       'app:alice:aad-8': { conversationId: 'older', updatedAt: '2026-11-20T00:00:00Z' },
+      'app:alice:aad-9': { conversationId: 'newer', updatedAt: '2026-11-21T00:00:00Z' },
+      'app:alice:aad-7': { conversationId: 'oldest', updatedAt: '2026-11-19T00:00:00Z' },
       'app:alice-two:aad-1': { conversationId: 'unrelated', updatedAt: '2026-11-22T00:00:00Z' },
     });
     const deps = { ...s, state: s.state as never, stateStore: { save: s.save } as never, options: resolveOptions({}) };
@@ -56,13 +57,13 @@ describe('deliverMessage', () => {
     expect(s.create).not.toHaveBeenCalled();
   });
 
-  it('creates a personal conversation when none is stored', async () => {
+  it('creates a personal conversation for a resolved recipient instead of using a stale fallback', async () => {
     const s = setup([
       { id: 'assistant', name: 'Assistant', type: 'agent', tools: {},
         identities: [{ connector: 'teams-bot', externalId: 'app' }] },
       { id: 'alice', name: 'Alice', type: 'user', tools: {},
         identities: [{ connector: 'teams', externalId: 'aad-1' }] },
-    ]);
+    ], { 'app:alice:aad-9': { conversationId: 'stale', updatedAt: '2026-11-21T00:00:00Z' } });
     await deliverMessage(
       { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
         apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', tenantId: 'tenant-1' }) },
@@ -77,7 +78,7 @@ describe('deliverMessage', () => {
       conversationId: 'conv-new', tenantId: 'tenant-1', aadObjectId: 'aad-1',
     }));
     expect(s.save).toHaveBeenCalledWith(s.state);
-    expect(s.send).toHaveBeenCalledWith('conv-new', expect.anything());
+    expect(s.send.mock.calls).toEqual([['conv-new', expect.objectContaining({ text: 'hello' })]]);
   });
 
   it('drops when the sender has no Teams bot', async () => {

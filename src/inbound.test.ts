@@ -4,7 +4,7 @@ import { handleInbound } from './inbound.js';
 import { emptyState } from './state.js';
 import { resolveOptions } from './options.js';
 import type { BotEntry, CollectiveLike } from './directory.js';
-import type { ConnectorContext } from '@legion-collective/core';
+import type { ConnectorContext, StreamChunk } from '@legion-collective/core';
 import { rememberPendingPair } from './pairing.js';
 
 function setup(participants: Array<Record<string, unknown>> = []) {
@@ -14,7 +14,7 @@ function setup(participants: Array<Record<string, unknown>> = []) {
     ({ result: { status: 'success' }, conversationId: 'c' }));
   const streamTool = vi.fn(async () => ({
     conversationId: 'conv-1',
-    gen: (async function* () {
+    gen: (async function* (): AsyncGenerator<StreamChunk> {
       yield { type: 'text_delta', delta: 'Hi' };
       yield { type: 'stream:done', result: { status: 'success', data: { conversationId: 'thread-1' } } };
     })(),
@@ -129,6 +129,41 @@ describe('handleInbound', () => {
     expect(s.streamTool).toHaveBeenNthCalledWith(2, 'alice', 'communicate', expect.objectContaining({ conversationId: 'thread-1' }));
     expect(s.state.conversations['app:alice'].conversationId).toBe('conv-1');
     expect(s.save).toHaveBeenCalled();
+  });
+
+  it('persists the returned thread even when the tool card edit fails', async () => {
+    const s = setup([alice]);
+    s.streamTool.mockResolvedValueOnce({
+      conversationId: 'outer',
+      gen: (async function* (): AsyncGenerator<StreamChunk> {
+        yield { type: 'tool_call_start', index: 0, id: 't1', name: 'search' };
+        yield { type: 'tool_call_args_delta', index: 0, delta: 'query' };
+        yield { type: 'stream:done', result: { status: 'success', data: { conversationId: 'thread-2' } } };
+      })(),
+    });
+    const send = vi.fn(async (value: unknown) => {
+      if ((value as { id?: string }).id) throw new Error('card edit failed');
+      return { id: 'card-1' };
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await handleInbound(inboundDeps(s, { toolDisplay: 'cards' }), { activity: activity('hello'), send });
+      expect(s.save).toHaveBeenCalledTimes(2);
+      expect(s.save).toHaveBeenLastCalledWith(expect.objectContaining({ legionConversations: { 'app:alice': 'thread-2' } }));
+    } finally { log.mockRestore(); }
+  });
+
+  it('keeps the stored thread when an error result lacks a thread id', async () => {
+    const s = setup([alice]);
+    s.state.legionConversations['app:alice'] = 'old-thread';
+    s.streamTool.mockResolvedValueOnce({
+      conversationId: 'outer',
+      gen: (async function* (): AsyncGenerator<StreamChunk> {
+        yield { type: 'stream:done', result: { status: 'error', error: 'failed' } };
+      })(),
+    });
+    await handleInbound(inboundDeps(s), { activity: activity('hello'), send: captureReply() });
+    expect(s.state.legionConversations['app:alice']).toBe('old-thread');
   });
 
   it('issues a pairing code for an unknown user', async () => {

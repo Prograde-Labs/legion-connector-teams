@@ -73,12 +73,67 @@ describe('runCommunicate', () => {
 
   it('uses the successful result response as labeled text when no deltas arrived', async () => {
     const send = vi.fn(async (_activity: MessageActivityInput) => undefined);
-    await runCommunicate({
+    const { conversationId } = await runCommunicate({
       ctx: fakeCtx([{ type: 'stream:done', result: { status: 'success', data: { response: 'Answer' } } }]),
       userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options(), stream: fakeStream(), send,
     });
     expect(send).toHaveBeenCalledOnce();
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ text: 'Answer', ...aiLabel }));
+    expect(conversationId).toBe('conv-1');
+  });
+
+  it.each(['initial send', 'edit'])('closes the stream and returns the thread after a tool card %s fails', async (stage) => {
+    const stream = fakeStream();
+    const send = vi.fn(async (activity: MessageActivityInput) => {
+      if (Boolean(activity.id) === (stage === 'edit')) throw new Error('Bearer secret-token');
+      return { id: 'card-1' };
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { conversationId } = await runCommunicate({
+        ctx: fakeCtx([
+          { type: 'tool_call_start', index: 0, id: 't1', name: 'search' },
+          { type: 'tool_call_args_delta', index: 0, delta: 'query' },
+          { type: 'stream:done', result: { status: 'success', data: { conversationId: 'thread-1' } } },
+        ]),
+        userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options({ toolDisplay: 'cards' }), stream, send,
+      });
+      expect(stream.closed).toBe(1);
+      expect(conversationId).toBe('thread-1');
+      expect(log).toHaveBeenCalled();
+      expect(JSON.stringify(log.mock.calls)).not.toContain('secret-token');
+    } finally { log.mockRestore(); }
+  });
+
+  it('limits accumulated tool card arguments to 500 characters', async () => {
+    const send = vi.fn(async (_activity: MessageActivityInput) => ({ id: 'card-1' }));
+    await runCommunicate({
+      ctx: fakeCtx([
+        { type: 'tool_call_start', index: 0, id: 't1', name: 'search' },
+        { type: 'tool_call_args_delta', index: 0, delta: 'a'.repeat(250) },
+        { type: 'tool_call_args_delta', index: 0, delta: 'b'.repeat(251) },
+        { type: 'stream:done', result: { status: 'success' } },
+      ]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options({ toolDisplay: 'cards' }), send,
+    });
+    expect(send.mock.lastCall?.[0].attachments?.[0].content).toMatchObject({
+      body: [expect.anything(), { text: 'a'.repeat(250) + 'b'.repeat(250) }],
+    });
+  });
+
+  it('sends a labeled partial response once before reporting a timeout error', async () => {
+    const send = vi.fn(async (_activity: MessageActivityInput) => undefined);
+    const { conversationId } = await runCommunicate({
+      ctx: fakeCtx([{ type: 'stream:done', result: {
+        status: 'error', error: 'timed out', data: { response: 'partial' },
+      } }]),
+      userId: 'alice', botOwnerId: 'assistant', text: 'hi', options: options(), send,
+    });
+    expect(send.mock.calls).toEqual([
+      [expect.objectContaining({ text: 'partial', ...aiLabel })],
+      [expect.objectContaining({ text: 'Error: timed out', ...aiLabel })],
+    ]);
+    expect(conversationId).toBeUndefined();
   });
 
   it('labels timeout and error text', async () => {

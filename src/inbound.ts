@@ -238,8 +238,10 @@ export async function handleInbound(
           stream: context.stream,
           send: (activity) => context.send(activity),
         });
-        deps.state.legionConversations[key] = conversationId;
-        await deps.stateStore.save(deps.state);
+        if (conversationId !== undefined) {
+          deps.state.legionConversations[key] = conversationId;
+          await deps.stateStore.save(deps.state);
+        }
       } finally {
         if (typing) clearInterval(typing);
       }
