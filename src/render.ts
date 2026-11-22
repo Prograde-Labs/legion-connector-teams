@@ -53,6 +53,7 @@ export function chunkMarkdown(text: string, maxChars: number): string[] {
 }
 
 export function approvalCard(approval: ApprovalRequest): IAdaptiveCard {
+  const argsText = truncate(serializeArgs(approval.args), 500);
   return {
     type: 'AdaptiveCard',
     version: '1.4',
@@ -62,7 +63,7 @@ export function approvalCard(approval: ApprovalRequest): IAdaptiveCard {
         type: 'FactSet',
         facts: [
           { title: 'Tool', value: approval.tool },
-          { title: 'Args', value: truncate(serializeArgs(approval.args), 500) },
+          { title: 'Args', value: argsText },
           { title: 'Requester', value: approval.requesterId },
         ],
       },
@@ -71,15 +72,53 @@ export function approvalCard(approval: ApprovalRequest): IAdaptiveCard {
       {
         type: 'Action.Execute',
         title: 'Approve',
-        data: { action: 'approve', approvalId: approval.approvalId },
+        data: {
+          action: 'approve',
+          approvalId: approval.approvalId,
+          tool: approval.tool,
+          argsText,
+          requesterId: approval.requesterId,
+        },
       },
       {
         type: 'Action.Execute',
         title: 'Reject',
-        data: { action: 'reject', approvalId: approval.approvalId },
+        data: {
+          action: 'reject',
+          approvalId: approval.approvalId,
+          tool: approval.tool,
+          argsText,
+          requesterId: approval.requesterId,
+        },
       },
     ],
   } as IAdaptiveCard;
+}
+
+export interface DecidedApprovalView {
+  tool?: string;
+  argsText?: string;
+  requesterId?: string;
+  outcome: 'approved' | 'rejected' | 'error';
+  message?: string;
+}
+
+/** Replace an approval card with its recorded outcome, removing the actions. */
+export function decidedApprovalCard(view: DecidedApprovalView): IAdaptiveCard {
+  const header =
+    view.outcome === 'approved'
+      ? '✅ Approved'
+      : view.outcome === 'rejected'
+        ? '❌ Rejected'
+        : '⚠️ Approval failed';
+  const facts: Array<{ title: string; value: string }> = [];
+  if (view.tool) facts.push({ title: 'Tool', value: view.tool });
+  if (view.argsText) facts.push({ title: 'Args', value: view.argsText });
+  if (view.requesterId) facts.push({ title: 'Requester', value: view.requesterId });
+  const body: unknown[] = [{ type: 'TextBlock', text: header, weight: 'Bolder', wrap: true }];
+  if (facts.length) body.push({ type: 'FactSet', facts });
+  if (view.message) body.push({ type: 'TextBlock', text: view.message, wrap: true });
+  return { type: 'AdaptiveCard', version: '1.4', body } as IAdaptiveCard;
 }
 
 export function toolCard(name: string, args: string): IAdaptiveCard {

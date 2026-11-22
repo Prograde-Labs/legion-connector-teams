@@ -2,7 +2,10 @@
 import { createServer, type Server } from 'node:http';
 import express from 'express';
 import { App, ExpressAdapter, type HttpMethod, type HttpRouteHandler } from '@microsoft/teams.apps';
-import type { AdaptiveCardActionMessageResponse } from '@microsoft/teams.api';
+import type {
+  AdaptiveCardActionCardResponse,
+  AdaptiveCardActionMessageResponse,
+} from '@microsoft/teams.api';
 import type { BotEntry } from './directory.js';
 import { describeError } from './errors.js';
 import type { ResolvedOptions } from './options.js';
@@ -25,7 +28,7 @@ export interface AppHandlers {
 
 export interface CardInvokeResponse {
   status: 200;
-  body: AdaptiveCardActionMessageResponse;
+  body: AdaptiveCardActionMessageResponse | AdaptiveCardActionCardResponse;
 }
 
 export type TransportContext =

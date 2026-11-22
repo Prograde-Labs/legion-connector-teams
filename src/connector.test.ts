@@ -94,7 +94,10 @@ describe('TeamsConnector', () => {
     const callTool = vi.fn(async () => ({
       result: {
         status: 'success',
-        data: { resumed: [{ conversationId: 'c1', response: 'resumed text' }] },
+        data: {
+          results: [{ approvalId: 'ap-1', outcome: 'approve' }],
+          resumed: [{ conversationId: 'c1', response: 'resumed text' }],
+        },
       },
     }));
     await connector.start({ callTool } as never);
@@ -104,14 +107,23 @@ describe('TeamsConnector', () => {
       const invoke = (id: string, conversationType = 'personal') => handlers.onApproval(entry, { send, activity: {
         from: { aadObjectId: 'aad-1' }, channelData: { tenant: { id } },
         conversation: { conversationType },
-        value: { action: { data: { approvalId: 'ap-1' } } },
+        value: { action: { data: {
+          approvalId: 'ap-1',
+          tool: 'file_write',
+          argsText: '{"path":"test.txt"}',
+          requesterId: 'assistant',
+        } } },
       } } as never, 'approve');
       expect(await invoke('other')).toHaveProperty('body.value', 'This bot is not available in your tenant.');
       expect(await invoke('t', 'groupChat')).toHaveProperty('body.value', 'Only personal chats are supported.');
       expect(callTool).not.toHaveBeenCalled();
-      expect(await invoke('t')).toEqual({ status: 200, body: {
-        statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'Approval recorded.',
+      const approved = await invoke('t');
+      expect(approved).toMatchObject({ status: 200, body: {
+        statusCode: 200, type: 'application/vnd.microsoft.card.adaptive',
       } });
+      expect(JSON.stringify(approved.body)).toContain('Approved');
+      expect(JSON.stringify(approved.body)).toContain('file_write');
+      expect((approved.body as { value?: { actions?: unknown[] } }).value?.actions ?? []).toHaveLength(0);
       participants[1].status = 'retired';
       expect(await invoke('t')).toHaveProperty('body.value', 'Not registered.');
       expect(callTool).toHaveBeenCalledOnce();

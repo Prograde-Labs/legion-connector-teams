@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approvalCard, chunkMarkdown, formatToolResult, toolCard } from './render.js';
+import { approvalCard, chunkMarkdown, decidedApprovalCard, formatToolResult, toolCard } from './render.js';
 
 describe('render', () => {
   it('returns a single chunk for short text', () => {
@@ -36,6 +36,19 @@ describe('render', () => {
       title: 'Approve',
       data: { action: 'approve', approvalId: 'ap-1' },
     });
+  });
+
+  it('builds a decided approval card without actions', () => {
+    const card = decidedApprovalCard({
+      outcome: 'approved',
+      tool: 'file_write',
+      argsText: '{"path":"test.txt"}',
+      requesterId: 'assistant',
+    });
+    expect(card.type).toBe('AdaptiveCard');
+    expect(card.actions ?? []).toHaveLength(0);
+    expect(JSON.stringify(card)).toContain('Approved');
+    expect(JSON.stringify(card)).toContain('file_write');
   });
 
   it('builds a tool card', () => {

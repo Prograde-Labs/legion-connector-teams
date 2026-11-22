@@ -7,11 +7,19 @@ import { describeError } from './errors.js';
 import { findTeamsActor, readTeamsId } from './identity.js';
 import { handleInbound, isBotTenant, tenantMismatchText, type TeamsContextLike } from './inbound.js';
 import { deliverMessage } from './outbound.js';
+import { decidedApprovalCard } from './render.js';
 import { resolveOptions, type ResolvedOptions, type TeamsConnectorOptions } from './options.js';
 import { StateStore, type TeamsState } from './state.js';
 
 function approvalResponse(value: string): CardInvokeResponse {
   return { status: 200, body: { statusCode: 200, type: 'application/vnd.microsoft.activity.message', value } };
+}
+
+function approvalCardResponse(card: ReturnType<typeof decidedApprovalCard>): CardInvokeResponse {
+  return {
+    status: 200,
+    body: { statusCode: 200, type: 'application/vnd.microsoft.card.adaptive', value: card },
+  };
 }
 
 export class TeamsConnector implements Connector {
@@ -122,7 +130,13 @@ export class TeamsConnector implements Connector {
     const aadObjectId = readTeamsId(context.activity.from);
     const participant = aadObjectId ? findTeamsActor(this.deps.collective, aadObjectId) : undefined;
     if (!participant) return approvalResponse('Not registered.');
-    const approvalId = context.activity.value?.action?.data?.approvalId;
+    const actionData = (context.activity.value?.action?.data ?? {}) as {
+      approvalId?: string;
+      tool?: string;
+      argsText?: string;
+      requesterId?: string;
+    };
+    const approvalId = actionData.approvalId;
     if (typeof approvalId !== 'string' || !approvalId.trim()) return approvalResponse('Missing approval id.');
     const result = await handleApprovalAction({
       ctx: this.ctx,
@@ -130,24 +144,42 @@ export class TeamsConnector implements Connector {
       decision,
       approvalId,
     });
-    if (result.status === 'success') {
-      const resumed = (result.data as { resumed?: ResumedItem[] } | undefined)?.resumed;
-      if (resumed?.length) {
-        try {
-          await sendResumed(
-            resumed,
-            (activity) => context.send(activity),
-            this.options.aiLabel,
-          );
-        } catch (error) {
-          console.error('Teams resumed delivery failed', describeError(error));
-        }
+    if (result.status !== 'success') {
+      return approvalResponse(`Approval failed: ${result.error ?? result.status}`);
+    }
+    const results = (result.data as {
+      results?: Array<{ approvalId?: string; outcome?: string }>;
+    } | undefined)?.results;
+    const outcome =
+      results?.find((entry) => entry.approvalId === approvalId)?.outcome ?? results?.[0]?.outcome;
+    const decided =
+      outcome === 'approve' || outcome === 'already_acknowledged'
+        ? 'approved'
+        : outcome === 'reject'
+          ? 'rejected'
+          : outcome === 'resume_pending' || outcome === 'resume_deferred'
+            ? decision === 'approve'
+              ? 'approved'
+              : 'rejected'
+            : undefined;
+    if (!decided) {
+      return approvalResponse(`Approval failed: ${outcome ?? 'unknown outcome'}`);
+    }
+    const resumed = (result.data as { resumed?: ResumedItem[] } | undefined)?.resumed;
+    if (resumed?.length) {
+      try {
+        await sendResumed(resumed, (activity) => context.send(activity), this.options.aiLabel);
+      } catch (error) {
+        console.error('Teams resumed delivery failed', describeError(error));
       }
     }
-    return approvalResponse(
-      result.status === 'success'
-        ? 'Approval recorded.'
-        : `Approval failed: ${result.error ?? result.status}`,
+    return approvalCardResponse(
+      decidedApprovalCard({
+        tool: actionData.tool,
+        argsText: actionData.argsText,
+        requesterId: actionData.requesterId,
+        outcome: decided,
+      }),
     );
   }
 
