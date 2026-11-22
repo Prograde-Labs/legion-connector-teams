@@ -31,7 +31,7 @@ Persist the workspace and connector state directory across restarts. Configure `
 
 HTTP is the default. Route public HTTPS traffic for `teams.prograde-labs.com` through your reverse proxy or tunnel to `legion-collective:3978` (or the Legion host's exposed port 3978). Preserve the path: each bot's registered messaging endpoint is `https://teams.prograde-labs.com/teams/<participantId>/api/messages`. `GET /health` returns HTTP 200 without authentication. Ensure your container/network exposes the port to the proxy.
 
-Alternatively set `"transport": "socket"`. Experimental Socket Mode needs no inbound port, public endpoint, or tunnel, and opens one outbound socket per configured geo for each bot. It is intended for new bots. The provisioning script still requires a `--base-url` argument.
+Alternatively set `"transport": "socket"`. Experimental Socket Mode needs no inbound port, public endpoint, or tunnel, and opens one outbound socket per configured geo for each bot. It is intended for new bots. Provision with `--socket` (`teams app create --messaging-mode socket`); `--base-url` is optional in that mode.
 
 ## Tenant and provisioning
 

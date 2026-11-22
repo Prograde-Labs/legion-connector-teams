@@ -9,7 +9,7 @@ const COLOR_PNG =
 const OUTLINE_PNG =
   'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR42u3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4tnPBf0AAAAASUVORK5CYII=';
 
-const usage = 'Usage: provision-teams-bot.mjs --participant <id> --base-url <url> [--force] [--dry-run]';
+const usage = 'Usage: provision-teams-bot.mjs --participant <id> [--base-url <url> | --socket] [--force] [--dry-run]';
 for (let i = 2; i < process.argv.length; i++) {
   if (['--participant', '--base-url', '--env', '--workspace', '--legion-url', '--legion-password'].includes(process.argv[i])) {
     const value = process.argv[i + 1];
@@ -28,7 +28,8 @@ function arg(name, fallback) {
 
 const participantId = arg('participant');
 const baseUrl = arg('base-url');
-if (!participantId || !baseUrl) {
+const socket = process.argv.includes('--socket');
+if (!participantId || (!baseUrl && !socket)) {
   console.error(usage);
   process.exit(2);
 }
@@ -44,7 +45,7 @@ const participantPath = join(workspace, '.legion/collective/participants', `${pa
 const participant = JSON.parse(await readFile(participantPath, 'utf8'));
 const previous = participant.identities?.find((identity) => identity.connector === 'teams-bot');
 const reuse = Boolean(previous && !force);
-const endpoint = `${baseUrl.replace(/\/$/, '')}/teams/${participantId}/api/messages`;
+const endpoint = baseUrl ? `${baseUrl.replace(/\/$/, '')}/teams/${participantId}/api/messages` : null;
 
 if (reuse) {
   if (!dryRun && (!previous.externalId?.trim() || /^<.*>$/.test(previous.externalId))) {
@@ -73,12 +74,10 @@ if (!dryRun && !reuse) {
   await protectEnvFile();
   const mask = process.umask(0o077);
   try {
-    execFileSync('teams', [
-      'app', 'create',
-      '--name', participant.name,
-      '--endpoint', endpoint,
-      '--env', envFile,
-    ], { stdio: ['inherit', 'ignore', 'ignore'] });
+    execFileSync('teams', socket
+      ? ['app', 'create', '--name', participant.name, '--messaging-mode', 'socket', '--env', envFile]
+      : ['app', 'create', '--name', participant.name, '--endpoint', endpoint, '--env', envFile],
+    { stdio: ['inherit', 'ignore', 'ignore'] });
   } catch {
     throw new Error(`teams app create failed; check Teams and ${envFile} before retrying.`);
   } finally {

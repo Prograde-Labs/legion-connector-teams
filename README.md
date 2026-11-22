@@ -82,13 +82,17 @@ Fallback maps unknown users to one shared Legion participant (`fallbackUserId`) 
 Run from the connector checkout, with `--workspace` pointing to the Legion workspace containing the participant files. Replace these example values with your own:
 
 ```sh
+# HTTP transport (public endpoint)
 node scripts/provision-teams-bot.mjs --participant assistant --base-url https://teams.prograde-labs.com --workspace /srv/legion
 node scripts/provision-all.mjs --base-url https://teams.prograde-labs.com --workspace /srv/legion --participants assistant,operator
+
+# Socket Mode (no public endpoint)
+node scripts/provision-teams-bot.mjs --participant assistant --socket --workspace /srv/legion
 ```
 
 The script reuses an existing `teams-bot` app ID and its stored credentials without calling `teams app create`. For a new bot it registers the app and stores credentials via Legion's `set_secret` tool. The credentials file (`--env`, default `<workspace>/.env.teams`) is restricted to mode `0600`. The script builds the app package with `zip` and calls Legion's `pair` tool as `operator`, so a running connector discovers new identities on its next rescan. Set `--legion-url` (default `http://127.0.0.1:3000`) and `--legion-password` (default `LEGION_BOOTSTRAP_PASSWORD`) as needed.
 
-Use `--force` to register a new bot and replace the identity in the participant file. The running collective still has the old identity until it is reconciled or Legion is restarted; restart promptly before making further changes to that participant. The old Teams registration is not deleted. Both scripts accept `--force` and `--dry-run`; without `--participants` the batch script selects non-retired agents. **Dry runs still write manifests and icons and set a placeholder identity for bots they would create**, so use a disposable workspace. Provisioning requires `--base-url` even for Socket Mode.
+Use `--force` to register a new bot and replace the identity in the participant file. The running collective still has the old identity until it is reconciled or Legion is restarted; restart promptly before making further changes to that participant. The old Teams registration is not deleted. Both scripts accept `--force`, `--dry-run`, and `--socket`; without `--participants` the batch script selects non-retired agents. **Dry runs still write manifests and icons and set a placeholder identity for bots they would create**, so use a disposable workspace. With `--socket`, `teams app create` runs with `--messaging-mode socket`; `--base-url` is optional.
 
 Install each generated app manually in Teams using the printed install link or package. If SecretStore setup fails after app creation, credentials remain in the environment file; follow the script's recovery message before rerunning to avoid duplicate registrations.
 

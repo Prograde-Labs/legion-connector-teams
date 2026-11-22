@@ -12,8 +12,9 @@ function arg(name, fallback) {
 
 const workspace = resolve(arg('workspace', process.env.LEGION_WORKSPACE ?? process.cwd()));
 const baseUrl = arg('base-url');
-if (!baseUrl) {
-  console.error('Usage: provision-all.mjs --base-url <url>');
+const socket = process.argv.includes('--socket');
+if (!baseUrl && !socket) {
+  console.error('Usage: provision-all.mjs [--base-url <url> | --socket]');
   process.exit(2);
 }
 
@@ -24,7 +25,7 @@ for (const name of ['env', 'legion-url', 'legion-password']) {
   const value = arg(name);
   if (value !== undefined) passthrough.push(`--${name}`, value);
 }
-for (const flag of ['--dry-run', '--force']) {
+for (const flag of ['--dry-run', '--force', '--socket']) {
   if (process.argv.includes(flag)) passthrough.push(flag);
 }
 const participants = [];
@@ -45,7 +46,7 @@ for (const participant of participants) {
   execFileSync('node', [
     join(import.meta.dirname, 'provision-teams-bot.mjs'),
     '--participant', participant.id,
-    '--base-url', baseUrl,
+    ...(baseUrl ? ['--base-url', baseUrl] : []),
     '--workspace', workspace,
     ...passthrough,
   ], { stdio: 'inherit' });
