@@ -43,6 +43,16 @@ export class TeamsConnector implements Connector {
     this.options = resolveOptions(options);
   }
 
+  canDeliver(participantId: string): boolean {
+    const participant = this.deps.collective.get(participantId);
+    return Boolean(
+      participant?.identities?.some(
+        (identity) =>
+          identity.connector === 'teams' || identity.connector === 'teams-group',
+      ),
+    );
+  }
+
   async start(ctx: ConnectorContext): Promise<void> {
     if (!this.deps.secrets) {
       throw new Error('Teams connector requires LEGION_SECRETS_KEY (deps.secrets)');

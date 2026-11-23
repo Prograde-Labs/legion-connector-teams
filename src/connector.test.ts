@@ -23,6 +23,8 @@ function setup() {
       identities: [{ connector: 'teams-bot', externalId: 'app' }] },
     { id: 'alice', name: 'Alice', type: 'user', tools: {}, status: 'active',
       identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+    { id: 'team-eng', name: 'Team Eng', type: 'user', tools: {}, status: 'active',
+      identities: [{ connector: 'teams-group', externalId: '19:g@thread.v2' }] },
   ];
   const collective = {
     list: () => participants,
@@ -244,5 +246,14 @@ describe('TeamsConnector', () => {
     expect(s.sent).toHaveLength(1);
     expect(s.sent[0].conversationId).toBe('conv-new');
     await c.stop();
+  });
+
+  it('reports deliverability from Teams identities', () => {
+    const { deps } = setup();
+    const connector = new TeamsConnector({ stateDir: '/tmp/teams-can-deliver' }, deps);
+    expect(connector.canDeliver('alice')).toBe(true);
+    expect(connector.canDeliver('team-eng')).toBe(true);
+    expect(connector.canDeliver('assistant')).toBe(false);
+    expect(connector.canDeliver('nobody')).toBe(false);
   });
 });

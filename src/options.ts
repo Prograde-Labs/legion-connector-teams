@@ -25,6 +25,7 @@ export interface TeamsConnectorOptions {
   maxMessageChars?: number;
   groupChats?: boolean;
   groupSenderPrefix?: string | null;
+  learnOutboundThread?: boolean;
 }
 
 export interface ResolvedOptions {
@@ -48,6 +49,7 @@ export interface ResolvedOptions {
   maxMessageChars: number;
   groupChats: boolean;
   groupSenderPrefix: string | null;
+  learnOutboundThread: boolean;
 }
 
 export function resolveOptions(options: TeamsConnectorOptions): ResolvedOptions {
@@ -79,5 +81,6 @@ export function resolveOptions(options: TeamsConnectorOptions): ResolvedOptions 
     maxMessageChars: options.maxMessageChars ?? 20000,
     groupChats: options.groupChats ?? true,
     groupSenderPrefix,
+    learnOutboundThread: options.learnOutboundThread ?? true,
   };
 }

@@ -31,3 +31,14 @@ describe('resolveOptions group chat options', () => {
     expect(resolveOptions({ stateDir: '/tmp/x', groupChats: false }).groupChats).toBe(false);
   });
 });
+
+describe('resolveOptions outbound thread learning', () => {
+  it('defaults learnOutboundThread on', () => {
+    expect(resolveOptions({ stateDir: '/tmp/x' }).learnOutboundThread).toBe(true);
+  });
+
+  it('can disable learnOutboundThread', () => {
+    expect(resolveOptions({ stateDir: '/tmp/x', learnOutboundThread: false }).learnOutboundThread)
+      .toBe(false);
+  });
+});
