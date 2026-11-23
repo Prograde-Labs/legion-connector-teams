@@ -80,7 +80,7 @@ esac
     expect(stdout).toContain(`https://example.test/install/${appId}`);
     expect(stdout + stderr).not.toMatch(/stub-secret|operator-token|stub-password/);
     const manifest = JSON.parse(await readFile(join(workspace, '.legion/teams-apps/assistant/manifest.json'), 'utf8'));
-    expect(manifest.bots).toEqual([expect.objectContaining({ botId: appId, scopes: ['personal'] })]);
+    expect(manifest.bots).toEqual([expect.objectContaining({ botId: appId, scopes: ['personal', 'groupChat'] })]);
     expect((await readParticipant()).identities).toEqual([userIdentity, botIdentity(appId)]);
     const request = (tool: string, args: object) => ({ method: 'POST', url: '/api/execute?stream=false',
       authorization: 'Bearer operator-token', body: { tool, args } });

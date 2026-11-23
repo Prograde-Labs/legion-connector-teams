@@ -120,7 +120,7 @@ const manifest = {
     full: `Legion agent ${participant.name} on Microsoft Teams.`,
   },
   accentColor: '#5865F2',
-  bots: [{ botId: appId, scopes: ['personal'], supportsFiles: false, isNotificationOnly: false }],
+  bots: [{ botId: appId, scopes: ['personal', 'groupChat'], supportsFiles: false, isNotificationOnly: false }],
   permissions: ['identity', 'messageTeamMembers'],
   validDomains: [],
 };
