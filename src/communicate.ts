@@ -29,6 +29,8 @@ export interface CommunicateDeps {
 export async function runCommunicate(deps: CommunicateDeps): Promise<{
   result: ToolResult;
   conversationId: string | undefined;
+  /** Finalized placeholder message id for a turn that paused for approval. */
+  approvalMessageId?: string;
 }> {
   const { gen, conversationId } = await deps.ctx.streamTool(deps.userId, 'communicate', {
     to: deps.botOwnerId,
@@ -43,6 +45,7 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
   let errorText = '';
   let errorSent = false;
   let closed = false;
+  let approvalMessageId: string | undefined;
   const reply = (text: string) => sendText(deps.send, deps.options.aiLabel, text);
   const tools = new Map<number, { name: string; args: string; displayedArgs?: string; activityId?: string }>();
 
@@ -114,11 +117,16 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
         // message so no typing activity lands after the reply.
         deps.stopTyping?.();
         if (deps.options.maxDetail !== 'minimal' && !closed && deps.stream) {
-          // Replace a stale "Calling <tool>…" status when the turn paused for
-          // approval; the resumed reply arrives as a separate message.
-          if (final.status === 'pending_approval') deps.stream.update('Awaiting approval…');
+          // A stream must finalize with text. When the turn pauses for approval
+          // before any text was streamed, emit a placeholder so Teams does not
+          // leave the informative status bubble dangling. The resumed reply
+          // arrives as a separate message; the placeholder is updated when the
+          // approval is decided.
+          const placeholder = final.status === 'pending_approval' && !buffer;
+          if (placeholder) deps.stream.emit('Awaiting approval…');
           closed = true;
-          await deps.stream.close();
+          const sent = await deps.stream.close();
+          if (placeholder) approvalMessageId = sent?.id;
         }
         break;
       case 'stream:error':
@@ -174,5 +182,6 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
     conversationId: typeof data?.conversationId === 'string'
       ? data.conversationId
       : final?.status === 'error' ? undefined : conversationId,
+    ...(approvalMessageId === undefined ? {} : { approvalMessageId }),
   };
 }

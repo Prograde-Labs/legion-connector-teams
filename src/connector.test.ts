@@ -143,6 +143,41 @@ describe('TeamsConnector', () => {
     } finally { await connector.stop(); }
   });
 
+  it('updates the awaiting-approval placeholder when a decision is made', async () => {
+    const { app, deps } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-approval-placeholder-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { results: [{ approvalId: 'ap-1', outcome: 'approve' }] } },
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      connector['state']!.approvalMessages['ap-1'] = {
+        appId: 'app', conversationId: 'conv-1', messageId: 'msg-1', createdAt: 'now',
+      };
+      const send = vi.fn();
+      const result = await handlers.onApproval(entry, {
+        send,
+        activity: {
+          from: { aadObjectId: 'aad-1', name: 'Alice' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { id: 'conv-1', conversationType: 'personal' },
+          value: { action: { data: {
+            approvalId: 'ap-1', tool: 'file_write', requesterId: 'assistant',
+          } } },
+        },
+      } as never, 'approve');
+      expect(result).toHaveProperty('body.value');
+      expect(send).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'msg-1', text: '✅ Approved by Alice.',
+      }));
+      expect(connector['state']!.approvalMessages['ap-1']).toBeUndefined();
+    } finally { await connector.stop(); }
+  });
+
   it('rejects group approval actions when group chats are disabled', async () => {
     const { app, deps } = setup();
     const factory = vi.fn<TeamsAppFactory>(() => app);

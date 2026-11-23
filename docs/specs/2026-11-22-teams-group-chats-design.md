@@ -73,7 +73,8 @@ TeamsConnector
    │     └── communicate from the group participant to the mentioned bot
    ├── Approvals   clicking human resolved via their teams identity
    ├── Outbound    target map → exact group conversation
-   └── State       conversations, pendingPairs, legionConversations, targets
+   └── State       conversations, pendingPairs, legionConversations, targets,
+                    approvalMessages
    ▼
 Legion core: ConnectorContext.streamTool / callTool / registry (unchanged)
 ```
@@ -265,7 +266,10 @@ When a member clicks Approve/Reject:
 3. Return a decided Adaptive Card with no buttons: outcome, tool, args, requester,
    optional rejection reason, and the decider's display name.
 4. Deliver any resumed replies and successor approval cards back to the group.
-5. On failure, keep the buttons and return an error message.
+5. If the paused turn streamed no text, replace its `Awaiting approval…`
+   placeholder message with the outcome and decider. The placeholder id is
+   stored in `approvalMessages` keyed by approval id and removed on decision.
+6. On failure, keep the buttons and return an error message.
 
 The card input `reason` continues to be merged into `Action.Execute` data and passed
 as `message` to `approval_response`.

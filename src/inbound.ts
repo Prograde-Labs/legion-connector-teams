@@ -239,7 +239,7 @@ async function runTurn(args: {
   }
 
   try {
-    const { conversationId } = await runCommunicate({
+    const { result, conversationId, approvalMessageId } = await runCommunicate({
       ctx: deps.ctx,
       userId: participantId,
       botOwnerId: deps.bot.participantId,
@@ -253,6 +253,22 @@ async function runTurn(args: {
     if (conversationId !== undefined) {
       deps.state.legionConversations[key] = conversationId;
       deps.state.legionConversationTargets[conversationId] = key;
+      await deps.stateStore.save(deps.state);
+    }
+    if (approvalMessageId && result.status === 'pending_approval') {
+      const approvals = (result.data as {
+        approvalRequests?: Array<{ approvalId?: unknown }>;
+      } | undefined)?.approvalRequests;
+      const teamsConversationId = deps.state.conversations[key]?.conversationId;
+      for (const approval of approvals ?? []) {
+        if (typeof approval.approvalId !== 'string' || !approval.approvalId) continue;
+        deps.state.approvalMessages[approval.approvalId] = {
+          appId: deps.bot.appId,
+          ...(teamsConversationId === undefined ? {} : { conversationId: teamsConversationId }),
+          messageId: approvalMessageId,
+          createdAt: new Date().toISOString(),
+        };
+      }
       await deps.stateStore.save(deps.state);
     }
   } finally {

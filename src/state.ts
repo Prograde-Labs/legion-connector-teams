@@ -21,12 +21,21 @@ export interface PendingPair {
   expiresAt: string;
 }
 
+/** Stream placeholder message tied to an approval awaiting a decision. */
+export interface ApprovalMessageRecord {
+  appId: string;
+  conversationId?: string;
+  messageId: string;
+  createdAt: string;
+}
+
 export interface TeamsState {
   version: 2;
   conversations: Record<string, ConversationRecord>;
   pendingPairs: Record<string, PendingPair>;
   legionConversations: Record<string, string>;
   legionConversationTargets: Record<string, string>;
+  approvalMessages: Record<string, ApprovalMessageRecord>;
 }
 
 export function emptyState(): TeamsState {
@@ -36,6 +45,7 @@ export function emptyState(): TeamsState {
     pendingPairs: {},
     legionConversations: {},
     legionConversationTargets: {},
+    approvalMessages: {},
   };
 }
 
@@ -85,7 +95,8 @@ function isV2(value: unknown): value is TeamsState {
     isPlainObject(value.conversations) &&
     isPlainObject(value.pendingPairs) &&
     isPlainObject(value.legionConversations) &&
-    (value.legionConversationTargets === undefined || isPlainObject(value.legionConversationTargets))
+    (value.legionConversationTargets === undefined || isPlainObject(value.legionConversationTargets)) &&
+    (value.approvalMessages === undefined || isPlainObject(value.approvalMessages))
   );
 }
 
@@ -123,6 +134,7 @@ function migrateV1(v1: V1State): TeamsState {
     pendingPairs,
     legionConversations: v1.legionConversations,
     legionConversationTargets: {},
+    approvalMessages: {},
   };
 }
 
@@ -133,6 +145,7 @@ function normalizeV2(parsed: TeamsState): TeamsState {
     pendingPairs: parsed.pendingPairs ?? {},
     legionConversations: parsed.legionConversations ?? {},
     legionConversationTargets: parsed.legionConversationTargets ?? {},
+    approvalMessages: parsed.approvalMessages ?? {},
   };
 }
 
