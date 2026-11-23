@@ -54,8 +54,9 @@ export async function deliverMessage(
       }
       record = {
         conversationId: conversation.id,
+        conversationType: 'personal',
+        externalId: userIdentity.externalId,
         tenantId: deps.options.tenantId,
-        aadObjectId: userIdentity.externalId,
         updatedAt: new Date().toISOString(),
       };
       deps.state.conversations[key] = record;

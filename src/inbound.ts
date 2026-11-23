@@ -64,9 +64,10 @@ function upsertConversation(
 ): void {
   state.conversations[key] = {
     conversationId: activity.conversation?.id ?? '',
+    conversationType: 'personal',
+    externalId: aadObjectId,
     tenantId: activity.channelData?.tenant?.id,
     serviceUrl: activity.serviceUrl,
-    aadObjectId,
     displayName,
     updatedAt: new Date().toISOString(),
   };

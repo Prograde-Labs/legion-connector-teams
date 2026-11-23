@@ -29,7 +29,7 @@ function deps(text: string, overrides: Record<string, unknown> = {}) {
 describe('commands', () => {
   it('allows only one in-flight pairing for a code', async () => {
     const { deps: d, sent } = deps('/pair');
-    const code = rememberPendingPair(d.state, 'app', 'aad-1', 600);
+    const code = rememberPendingPair(d.state, { appId: 'app', connector: 'teams', externalId: 'aad-1' }, 600);
     let finish!: () => void;
     const wait = new Promise<void>((resolve) => { finish = resolve; });
     const callTool = vi.fn(async () => {
@@ -50,7 +50,7 @@ describe('commands', () => {
 
   it('releases the in-flight code after a tool exception', async () => {
     const { deps: d, callTool } = deps('/pair');
-    const code = rememberPendingPair(d.state, 'app', 'aad-1', 600);
+    const code = rememberPendingPair(d.state, { appId: 'app', connector: 'teams', externalId: 'aad-1' }, 600);
     callTool.mockImplementationOnce(async () => { throw new Error('tool unavailable'); });
     const request = { ...d, text: `/pair ${code} bob` };
     await expect(handleCommand(request)).rejects.toThrow('tool unavailable');
@@ -70,7 +70,7 @@ describe('commands', () => {
 
   it('pairs with a valid code via the core pair tool', async () => {
     const { deps: d, callTool, sent } = deps('/pair ABCDEF bob');
-    rememberPendingPair(d.state, 'app', 'aad-9', 600);
+    rememberPendingPair(d.state, { appId: 'app', connector: 'teams', externalId: 'aad-9' }, 600);
     const code = Object.keys(d.state.pendingPairs)[0];
     await handleCommand({ ...d, text: `/pair ${code} bob` });
     expect(callTool).toHaveBeenCalledWith('alice', 'pair', {
@@ -88,7 +88,7 @@ describe('commands', () => {
     ['error', 'Authorization: requires_approval', /awaiting approval/],
   ])('retains the code on %s', async (status, error, message) => {
     const { deps: d, sent } = deps('/pair');
-    const code = rememberPendingPair(d.state, 'app', 'aad-1', 600);
+    const code = rememberPendingPair(d.state, { appId: 'app', connector: 'teams', externalId: 'aad-1' }, 600);
     const callTool = vi.fn(async () => ({ result: { status, error }, conversationId: 'c' }));
     await handleCommand({ ...d, text: `/pair ${code.toLowerCase()} bob`, ctx: { callTool } as unknown as ConnectorContext });
     expect(callTool).toHaveBeenCalledOnce();
@@ -98,7 +98,9 @@ describe('commands', () => {
 
   it.each(['2000-01-01T00:00:00.000Z', 'invalid'])('removes an invalid expiry %s without calling the tool', async (expiresAt) => {
     const { deps: d, callTool } = deps('/pair ABC234 bob');
-    d.state.pendingPairs['ABC234'] = { appId: 'app', aadObjectId: 'aad-1', expiresAt };
+    d.state.pendingPairs['ABC234'] = {
+      appId: 'app', connector: 'teams', externalId: 'aad-1', expiresAt,
+    };
     await handleCommand(d);
     expect(callTool).not.toHaveBeenCalled();
     expect(d.state.pendingPairs['ABC234']).toBeUndefined();
@@ -106,7 +108,7 @@ describe('commands', () => {
 
   it('does not consume a code belonging to another bot', async () => {
     const { deps: d, callTool } = deps('/pair');
-    const code = rememberPendingPair(d.state, 'other-app', 'aad-1', 600);
+    const code = rememberPendingPair(d.state, { appId: 'other-app', connector: 'teams', externalId: 'aad-1' }, 600);
     await handleCommand({ ...d, text: `/pair ${code} bob` });
     expect(callTool).not.toHaveBeenCalled();
     expect(d.state.pendingPairs[code]).toBeDefined();
@@ -116,7 +118,7 @@ describe('commands', () => {
     const { deps: d, callTool } = deps('/pair', {
       options: resolveOptions({ stateDir: '/tmp/x', pairingParticipantId: 'pairing-agent' }),
     });
-    rememberPendingPair(d.state, 'app', 'aad-1', 600);
+    rememberPendingPair(d.state, { appId: 'app', connector: 'teams', externalId: 'aad-1' }, 600);
     const code = Object.keys(d.state.pendingPairs)[0];
     await handleCommand({ ...d, text: `/pair ${code} bob` });
     expect(callTool).toHaveBeenCalledWith('pairing-agent', 'pair', expect.anything());

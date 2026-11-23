@@ -104,7 +104,9 @@ describe('handleInbound', () => {
     expect(s.streamTool).toHaveBeenNthCalledWith(2, 'alice', 'communicate', expect.objectContaining({ conversationId: undefined }));
     await handleInbound(deps, { activity: activity('/new', 'aad-8'), send });
     expect(s.state.legionConversations).toEqual({ 'app:alice:aad-9': 'thread-1' });
-    const code = rememberPendingPair(s.state, 'app', 'aad-7', 600);
+    const code = rememberPendingPair(
+      s.state, { appId: 'app', connector: 'teams', externalId: 'aad-7' }, 600,
+    );
     await handleInbound(deps, { activity: activity(`/pair ${code} bob`, 'aad-8'), send });
     expect(s.callTool).not.toHaveBeenCalled();
     expect(s.state.pendingPairs[code]).toBeDefined();

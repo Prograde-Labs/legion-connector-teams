@@ -75,7 +75,10 @@ describe('deliverMessage', () => {
       channelData: { tenant: { id: 'tenant-1' } },
     }));
     expect(s.state.conversations['app:alice']).toEqual(expect.objectContaining({
-      conversationId: 'conv-new', tenantId: 'tenant-1', aadObjectId: 'aad-1',
+      conversationId: 'conv-new',
+      conversationType: 'personal',
+      externalId: 'aad-1',
+      tenantId: 'tenant-1',
     }));
     expect(s.save).toHaveBeenCalledWith(s.state);
     expect(s.send.mock.calls).toEqual([['conv-new', expect.objectContaining({ text: 'hello' })]]);

@@ -108,9 +108,10 @@ export class TeamsConnector implements Connector {
     if (!participant) return;
     this.state.conversations[`${bot.appId}:${participant.id}`] = {
       conversationId: activity.conversation.id,
+      conversationType: 'personal',
+      externalId: aadObjectId,
       tenantId: activity.channelData?.tenant?.id,
       serviceUrl: activity.serviceUrl,
-      aadObjectId,
       displayName: activity.from?.name,
       updatedAt: new Date().toISOString(),
     };

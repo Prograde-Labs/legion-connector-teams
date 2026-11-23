@@ -11,19 +11,29 @@ async function backups(dir: string): Promise<string[]> {
 }
 
 describe('StateStore', () => {
-  it('returns empty state when the file is missing', async () => {
+  it('returns empty v2 state when the file is missing', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
     await expect(new StateStore(dir).load()).resolves.toEqual(emptyState());
   });
 
-  it('round-trips state', async () => {
+  it('round-trips v2 state', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
     const store = new StateStore(dir);
     const state = emptyState();
     state.conversations['app:alice'] = {
       conversationId: 'conv-1',
+      conversationType: 'personal',
+      externalId: 'aad-1',
       updatedAt: '2026-11-21T00:00:00.000Z',
     };
+    state.conversations['app:group:19:g@thread.v2'] = {
+      conversationId: '19:g@thread.v2',
+      conversationType: 'groupChat',
+      externalId: '19:g@thread.v2',
+      name: 'Engineering',
+      updatedAt: '2026-11-21T00:00:00.000Z',
+    };
+    state.legionConversationTargets['thread-1'] = 'app:group:19:g@thread.v2';
     await store.save(state);
     await expect(store.load()).resolves.toEqual(state);
   });
@@ -49,6 +59,66 @@ describe('StateStore', () => {
     await expect(store.load()).resolves.toEqual(second);
   });
 
+  it('migrates v1 conversations and pending pairs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
+    await writeFile(join(dir, 'state.json'), JSON.stringify({
+      version: 1,
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          tenantId: 'tenant-1',
+          serviceUrl: 'https://smba.trafficmanager.net/teams/',
+          aadObjectId: 'aad-1',
+          displayName: 'Alice',
+          updatedAt: '2026-11-21T00:00:00.000Z',
+        },
+      },
+      pendingPairs: {
+        ABC234: {
+          appId: 'app',
+          aadObjectId: 'aad-2',
+          expiresAt: '2026-11-22T00:00:00.000Z',
+        },
+      },
+      legionConversations: { 'app:alice': 'thread-1' },
+    }));
+    await expect(new StateStore(dir).load()).resolves.toEqual({
+      version: 2,
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          externalId: 'aad-1',
+          tenantId: 'tenant-1',
+          serviceUrl: 'https://smba.trafficmanager.net/teams/',
+          displayName: 'Alice',
+          updatedAt: '2026-11-21T00:00:00.000Z',
+        },
+      },
+      pendingPairs: {
+        ABC234: {
+          appId: 'app',
+          connector: 'teams',
+          externalId: 'aad-2',
+          expiresAt: '2026-11-22T00:00:00.000Z',
+        },
+      },
+      legionConversations: { 'app:alice': 'thread-1' },
+      legionConversationTargets: {},
+    });
+  });
+
+  it('defaults a missing target map on load', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
+    await writeFile(join(dir, 'state.json'), JSON.stringify({
+      version: 2,
+      conversations: {},
+      pendingPairs: {},
+      legionConversations: {},
+    }));
+    await expect(new StateStore(dir).load()).resolves.toEqual(emptyState());
+  });
+
   it('backs up corrupt state and starts fresh', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
     await writeFile(join(dir, 'state.json'), '{not json');
@@ -70,11 +140,11 @@ describe('StateStore', () => {
   it.each([
     [
       'non-object map',
-      '{"version":1,"conversations":[],"pendingPairs":{},"legionConversations":{}}',
+      '{"version":2,"conversations":[],"pendingPairs":{},"legionConversations":{},"legionConversationTargets":{}}',
     ],
     [
       'unsupported version',
-      '{"version":2,"conversations":{},"pendingPairs":{},"legionConversations":{}}',
+      '{"version":3,"conversations":{},"pendingPairs":{},"legionConversations":{}}',
     ],
   ])('backs up valid JSON with malformed shape: %s', async (_label, contents) => {
     const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));

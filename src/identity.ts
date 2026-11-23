@@ -60,7 +60,12 @@ export function resolveIdentity(args: {
       return {
         kind: 'pairing',
         aadObjectId,
-        code: rememberPendingPair(state, appId, aadObjectId, options.pairingTtlSeconds, now),
+        code: rememberPendingPair(
+          state,
+          { appId, connector: 'teams', externalId: aadObjectId },
+          options.pairingTtlSeconds,
+          now,
+        ),
       };
     case 'auto-provision':
       return { kind: 'auto-provision', aadObjectId, displayName };

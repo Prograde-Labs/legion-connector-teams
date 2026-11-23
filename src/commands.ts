@@ -56,12 +56,17 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
         const caller = deps.options.pairingParticipantId ?? deps.participantId;
         const { result } = await deps.ctx.callTool(caller, 'pair', {
           participantId: target,
-          connector: 'teams',
-          externalId: pending.aadObjectId,
+          connector: pending.connector,
+          externalId: pending.externalId,
         });
         if (result.status === 'success') {
           delete deps.state.pendingPairs[code.toUpperCase()];
-          await deps.send(`Paired ${target} with Teams identity ${pending.aadObjectId}.`);
+          const label = pending.connector === 'teams'
+            ? 'Teams'
+            : pending.connector === 'teams-group'
+              ? 'Teams group'
+              : pending.connector;
+          await deps.send(`Paired ${target} with ${label} identity ${pending.externalId}.`);
         } else if (isAwaitingApproval(result)) {
           await deps.send('Pairing is awaiting approval.');
         } else {
