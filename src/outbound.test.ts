@@ -332,4 +332,35 @@ describe('deliverMessage', () => {
     expect(s.send).toHaveBeenCalledWith('19:g1@thread.v2', expect.objectContaining({ text: 'hello' }));
     expect(s.send).not.toHaveBeenCalledWith('19:g2@thread.v2', expect.anything());
   });
+  it('does not reuse a learned target for a different recipient', async () => {
+    const s = setup([
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+      { id: 'alice', identities: [{ connector: 'teams', externalId: 'aad-a' }] },
+      { id: 'bob', identities: [{ connector: 'teams', externalId: 'aad-b' }] },
+    ], { 'app:alice': { conversationId: 'alice-chat', updatedAt: 'now' } });
+    const deps = { ...s, state: s.state as never, stateStore: { save: s.save } as never, options: resolveOptions({}) };
+    const message = { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' };
+    await deliverMessage(deps, message);
+    s.send.mockClear();
+    await expect(deliverMessage(deps, { ...message, recipientId: 'bob' })).resolves.toEqual({ status: 'delivered' });
+    expect(s.create).toHaveBeenCalledWith(expect.objectContaining({ members: [{ id: 'aad-b' }] }));
+    expect(s.send).toHaveBeenCalledTimes(1);
+    expect(s.send).toHaveBeenCalledWith('conv-new', expect.anything());
+  });
+
+  it('reports delivered if saving state fails after a successful send', async () => {
+    const s = setup([{ id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] }],
+      { 'app:alice': { conversationId: 'alice-chat', updatedAt: 'now' } });
+    s.save.mockRejectedValueOnce(new Error('disk error'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(deliverMessage(
+        { ...s, state: s.state as never, stateStore: { save: s.save } as never, options: resolveOptions({}) },
+        { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
+      )).resolves.toEqual({ status: 'delivered' });
+      expect(s.send).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith('Teams state save failed after delivery', expect.stringContaining('disk error'));
+    } finally { log.mockRestore(); }
+  });
+
 });

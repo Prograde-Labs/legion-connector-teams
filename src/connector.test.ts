@@ -256,4 +256,12 @@ describe('TeamsConnector', () => {
     expect(connector.canDeliver('assistant')).toBe(false);
     expect(connector.canDeliver('nobody')).toBe(false);
   });
+  it('keeps the configured fallback reachable without a Teams identity', () => {
+    const { deps, participants } = setup();
+    participants.push({ ...participants[1], id: 'fallback-user', identities: [] });
+    const connector = new TeamsConnector({ stateDir: '/tmp/teams-can-deliver', fallbackUserId: 'fallback-user' }, deps);
+    expect(connector.canDeliver('fallback-user')).toBe(true);
+    expect(connector.canDeliver('assistant')).toBe(false);
+  });
+
 });

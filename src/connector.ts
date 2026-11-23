@@ -50,12 +50,10 @@ export class TeamsConnector implements Connector {
 
   canDeliver(participantId: string): boolean {
     const participant = this.deps.collective.get(participantId);
-    return Boolean(
-      participant?.identities?.some(
-        (identity) =>
-          identity.connector === 'teams' || identity.connector === 'teams-group',
-      ),
-    );
+    if (participant?.identities?.some(
+      (identity) => identity.connector === 'teams' || identity.connector === 'teams-group',
+    )) return true;
+    return this.options.fallbackUserId === participantId;
   }
 
   async start(ctx: ConnectorContext): Promise<void> {

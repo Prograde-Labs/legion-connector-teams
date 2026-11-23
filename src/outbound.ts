@@ -51,7 +51,11 @@ export async function deliverMessage(
   let recordKey: string | undefined;
 
   const mappedKey = deps.state.legionConversationTargets[message.conversationId];
-  if (mappedKey) {
+  if (
+    mappedKey &&
+    (mappedKey === `${appId}:${message.recipientId}` ||
+      mappedKey.startsWith(`${appId}:${message.recipientId}:`))
+  ) {
     record = deps.state.conversations[mappedKey];
     if (record) recordKey = mappedKey;
   }
@@ -138,7 +142,11 @@ export async function deliverMessage(
   if (deps.options.learnOutboundThread) {
     deps.state.legionConversations[recordKey] = message.conversationId;
   }
-  await deps.stateStore.save(deps.state);
+  try {
+    await deps.stateStore.save(deps.state);
+  } catch (error) {
+    console.error('Teams state save failed after delivery', describeError(error));
+  }
 
   return { status: 'delivered' };
 }

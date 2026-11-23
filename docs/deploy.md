@@ -45,6 +45,6 @@ Use `scripts/provision-teams-bot.mjs` for each participant or `scripts/provision
 
 - Watch for `[legion] external connector 'teams' started` in Legion logs. This only confirms connector startup, not that each bot is usable.
 - Monitor per-bot startup and shutdown and `[teams]` initialization, start, stop, directory, and rebuild errors. The current bot pool logs per-bot failures, not successful per-bot start/stop events. HTTP reconciliation restarts the listener only when the bot directory changes.
-- Check for 403 delivery or conversation-creation errors, including an app not installed for the user. Install that bot manually and retry; outbound failures are logged as `Teams message delivery failed` or `Teams conversation creation failed` and returned to the initiating `communicate` call as a `failed` or `not-reachable` reason.
+- Check for 403 delivery or conversation-creation errors, including an app not installed for the user. Install that bot manually and retry; outbound failures are logged as `Teams message delivery failed` or `Teams conversation creation failed` and returned to the initiating `communicate` call as a `failed` reason; a missing bot or conversation instead returns `not-reachable`.
 - Check for missing or malformed `teams-bot` secrets and app ID mismatches; such bots are skipped. Confirm the participant identity and SecretStore key match.
 - Socket Mode has no HTTP health endpoint. For HTTP, check `/health` separately from end-to-end Teams delivery.
