@@ -1,4 +1,5 @@
 // src/outbound.ts
+import type { DeliveryOutcome } from '@legion-collective/core';
 import type { CollectiveLike } from './directory.js';
 import { MessageActivityInput } from '@microsoft/teams.api';
 import type { ResolvedOptions } from './options.js';
@@ -26,20 +27,34 @@ export interface OutboundDeps {
 export async function deliverMessage(
   deps: OutboundDeps,
   message: { senderId: string; recipientId: string; conversationId: string; content: string },
-): Promise<void> {
+): Promise<DeliveryOutcome> {
   const sender = deps.collective.get(message.senderId);
   const botIdentity = sender?.identities?.find((i) => i.connector === 'teams-bot');
-  if (!botIdentity || deps.apps.ownerOf(botIdentity.externalId) !== message.senderId) return;
+  if (!botIdentity || deps.apps.ownerOf(botIdentity.externalId) !== message.senderId) {
+    return {
+      status: 'not-reachable',
+      reason: `sender '${message.senderId}' has no live Teams bot`,
+    };
+  }
 
   const app = deps.apps.getByAppId(botIdentity.externalId);
-  if (!app) return;
+  if (!app) {
+    return {
+      status: 'not-reachable',
+      reason: `Teams app '${botIdentity.externalId}' is not running`,
+    };
+  }
 
   const appId = botIdentity.externalId;
   const recipient = deps.collective.get(message.recipientId);
   let record: ConversationRecord | undefined;
+  let recordKey: string | undefined;
 
-  const targetKey = deps.state.legionConversationTargets[message.conversationId];
-  if (targetKey) record = deps.state.conversations[targetKey];
+  const mappedKey = deps.state.legionConversationTargets[message.conversationId];
+  if (mappedKey) {
+    record = deps.state.conversations[mappedKey];
+    if (record) recordKey = mappedKey;
+  }
 
   if (!record) {
     const groupIdentity = recipient?.identities?.find((i) => i.connector === 'teams-group');
@@ -52,11 +67,11 @@ export async function deliverMessage(
         updatedAt: new Date().toISOString(),
       };
       deps.state.conversations[key] = record;
-      deps.state.legionConversationTargets[message.conversationId] = key;
-      await deps.stateStore.save(deps.state);
+      recordKey = key;
     } else {
       const key = `${appId}:${message.recipientId}`;
       record = deps.state.conversations[key];
+      recordKey = key;
 
       if (!record) {
         const userIdentity = recipient?.identities?.find((i) => i.connector === 'teams');
@@ -69,8 +84,12 @@ export async function deliverMessage(
               channelData: { tenant: { id: deps.options.tenantId } },
             });
           } catch (error) {
-            console.error('Teams conversation creation failed', describeError(error));
-            return;
+            const reason = describeError(error);
+            console.error('Teams conversation creation failed', reason);
+            return {
+              status: 'failed',
+              reason: `Teams conversation creation failed: ${reason}`,
+            };
           }
           record = {
             conversationId: conversation.id,
@@ -80,8 +99,6 @@ export async function deliverMessage(
             updatedAt: new Date().toISOString(),
           };
           deps.state.conversations[key] = record;
-          deps.state.legionConversationTargets[message.conversationId] = key;
-          await deps.stateStore.save(deps.state);
         } else {
           for (const [candidateKey, candidate] of Object.entries(deps.state.conversations)) {
             if (
@@ -90,13 +107,20 @@ export async function deliverMessage(
               (!record || candidate.updatedAt > record.updatedAt)
             ) {
               record = candidate;
+              recordKey = candidateKey;
             }
           }
         }
       }
     }
   }
-  if (!record) return;
+
+  if (!record || !recordKey) {
+    return {
+      status: 'not-reachable',
+      reason: `no Teams conversation for '${message.recipientId}'`,
+    };
+  }
 
   for (const chunk of chunkMarkdown(message.content, deps.options.maxMessageChars)) {
     const activity = new MessageActivityInput(chunk);
@@ -104,8 +128,17 @@ export async function deliverMessage(
     try {
       await app.send(record.conversationId, activity);
     } catch (error) {
-      console.error('Teams message delivery failed', describeError(error));
-      return;
+      const reason = describeError(error);
+      console.error('Teams message delivery failed', reason);
+      return { status: 'failed', reason: `Teams message delivery failed: ${reason}` };
     }
   }
+
+  deps.state.legionConversationTargets[message.conversationId] = recordKey;
+  if (deps.options.learnOutboundThread) {
+    deps.state.legionConversations[recordKey] = message.conversationId;
+  }
+  await deps.stateStore.save(deps.state);
+
+  return { status: 'delivered' };
 }

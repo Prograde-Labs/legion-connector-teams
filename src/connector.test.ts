@@ -239,10 +239,10 @@ describe('TeamsConnector', () => {
       () => s.app,
     );
     await c.start({ registry: { setActive() {}, clearActive() {} } } as never);
-    await c.deliver({
+    await expect(c.deliver({
       id: 'm1', conversationId: 'conv-1', senderId: 'assistant',
       recipientId: 'alice', content: 'hello', timestamp: 'now',
-    });
+    })).resolves.toEqual({ status: 'delivered' });
     expect(s.sent).toHaveLength(1);
     expect(s.sent[0].conversationId).toBe('conv-new');
     await c.stop();

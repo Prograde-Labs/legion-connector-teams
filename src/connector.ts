@@ -1,5 +1,10 @@
 // src/connector.ts
-import type { Connector, ConnectorContext, ConnectorRuntimeDeps } from '@legion-collective/core';
+import type {
+  Connector,
+  ConnectorContext,
+  ConnectorRuntimeDeps,
+  DeliveryOutcome,
+} from '@legion-collective/core';
 import { handleApprovalAction, sendResumed, type ResumedItem } from './approvals.js';
 import { BotPool, defaultAppFactory, type CardInvokeResponse, type TeamsAppFactory } from './bot-pool.js';
 import { buildDirectory, type BotEntry } from './directory.js';
@@ -223,9 +228,11 @@ export class TeamsConnector implements Connector {
     replyTo?: string;
     content: string;
     timestamp: string;
-  }): Promise<void> {
-    if (!this.state || !this.store || !this.pool) return;
-    await deliverMessage(
+  }): Promise<DeliveryOutcome> {
+    if (!this.state || !this.store || !this.pool) {
+      return { status: 'not-reachable', reason: 'Teams connector is not started' };
+    }
+    return deliverMessage(
       {
         collective: this.deps.collective,
         state: this.state,

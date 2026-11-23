@@ -34,7 +34,8 @@ describe('deliverMessage', () => {
     await deliverMessage(deps, message);
     expect(s.send).toHaveBeenLastCalledWith('newer', expect.objectContaining({ text: 'hello' }));
     s.state.conversations['app:alice'] = { conversationId: 'exact', updatedAt: '2026-11-19T00:00:00Z' };
-    await deliverMessage(deps, message);
+    // A second conversation has no learned target, so it resolves the exact route afresh.
+    await deliverMessage(deps, { ...message, conversationId: 'legion-2' });
     expect(s.send).toHaveBeenLastCalledWith('exact', expect.objectContaining({ text: 'hello' }));
     expect(s.create).not.toHaveBeenCalled();
   });
@@ -109,21 +110,24 @@ describe('deliverMessage', () => {
     expect(s.send.mock.calls).toEqual([['conv-new', expect.objectContaining({ text: 'hello' })]]);
   });
 
-  it('drops when the sender has no Teams bot', async () => {
+  it('reports not-reachable when the sender has no Teams bot', async () => {
     const s = setup([
       { id: 'assistant', name: 'Assistant', type: 'agent', tools: {} },
       { id: 'alice', name: 'Alice', type: 'user', tools: {},
         identities: [{ connector: 'teams', externalId: 'aad-1' }] },
     ]);
-    await deliverMessage(
+    await expect(deliverMessage(
       { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
         apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
       { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
-    );
+    )).resolves.toEqual({
+      status: 'not-reachable',
+      reason: "sender 'assistant' has no live Teams bot",
+    });
     expect(s.send).not.toHaveBeenCalled();
   });
 
-  it('logs and drops a failed Teams send', async () => {
+  it('reports failed and logs a sanitized Teams send error', async () => {
     const s = setup([
       { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
     ], { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } });
@@ -135,7 +139,10 @@ describe('deliverMessage', () => {
         { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
           apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
         { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
-      )).resolves.toBeUndefined();
+      )).resolves.toEqual({
+        status: 'failed',
+        reason: 'Teams message delivery failed: Error: 403 Bearer [redacted]',
+      });
       expect(log).toHaveBeenCalledWith('Teams message delivery failed', 'Error: 403 Bearer [redacted]');
       expect(JSON.stringify(log.mock.calls)).not.toContain('abc123');
       expect(JSON.stringify(log.mock.calls)).not.toContain('secret-field');
@@ -144,7 +151,7 @@ describe('deliverMessage', () => {
     }
   });
 
-  it('logs a sanitized creation failure without saving or sending', async () => {
+  it('reports failed and logs a sanitized creation error without saving or sending', async () => {
     const s = setup([
       { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
       { id: 'alice', identities: [{ connector: 'teams', externalId: 'aad-1' }] },
@@ -156,7 +163,10 @@ describe('deliverMessage', () => {
         { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
           apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
         { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
-      )).resolves.toBeUndefined();
+      )).resolves.toEqual({
+        status: 'failed',
+        reason: 'Teams conversation creation failed: Error: 403 Bearer [redacted]',
+      });
       expect(log).toHaveBeenCalledWith('Teams conversation creation failed', 'Error: 403 Bearer [redacted]');
       expect(JSON.stringify(log.mock.calls)).not.toContain('abc123');
       expect(s.state.conversations).toEqual({});
@@ -167,7 +177,7 @@ describe('deliverMessage', () => {
     }
   });
 
-  it('drops when the bot app or recipient identity is missing', async () => {
+  it('reports not-reachable when the bot app or recipient identity is missing', async () => {
     const s = setup([
       { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'other' }] },
       { id: 'alice' },
@@ -175,12 +185,64 @@ describe('deliverMessage', () => {
     const deps = { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
       apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) };
     const message = { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' };
-    await deliverMessage(deps, message);
+    await expect(deliverMessage(deps, message)).resolves.toEqual({
+      status: 'not-reachable',
+      reason: "sender 'assistant' has no live Teams bot",
+    });
     expect(s.create).not.toHaveBeenCalled();
     (s.collective.get('assistant')!.identities![0]).externalId = 'app';
-    await deliverMessage(deps, message);
+    await expect(deliverMessage(deps, message)).resolves.toEqual({
+      status: 'not-reachable',
+      reason: "no Teams conversation for 'alice'",
+    });
     expect(s.create).not.toHaveBeenCalled();
     expect(s.send).not.toHaveBeenCalled();
+  });
+
+  it('sets the target map and learns the thread by default', async () => {
+    const s = setup([
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+      { id: 'alice', identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+    ], { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } });
+    await expect(deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
+      { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
+    )).resolves.toEqual({ status: 'delivered' });
+    expect(s.state.legionConversationTargets['legion-1']).toBe('app:alice');
+    expect(s.state.legionConversations['app:alice']).toBe('legion-1');
+    expect(s.save).toHaveBeenCalledWith(s.state);
+  });
+
+  it('sets the target map without changing the thread when learning is off', async () => {
+    const s = setup([
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+      { id: 'alice', identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+    ], { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } });
+    s.state.legionConversations['app:alice'] = 'legion-previous';
+    await expect(deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never,
+        options: resolveOptions({ stateDir: '/tmp/x', learnOutboundThread: false }) },
+      { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
+    )).resolves.toEqual({ status: 'delivered' });
+    expect(s.state.legionConversationTargets['legion-1']).toBe('app:alice');
+    expect(s.state.legionConversations['app:alice']).toBe('legion-previous');
+    expect(s.save).toHaveBeenCalledWith(s.state);
+  });
+
+  it('learns the group thread by default', async () => {
+    const s = setup([
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+      { id: 'team-eng', identities: [{ connector: 'teams-group', externalId: '19:g@thread.v2' }] },
+    ]);
+    await expect(deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
+      { senderId: 'assistant', recipientId: 'team-eng', conversationId: 'legion-1', content: 'hello' },
+    )).resolves.toEqual({ status: 'delivered' });
+    expect(s.state.legionConversationTargets['legion-1']).toBe('app:team-eng:19:g@thread.v2');
+    expect(s.state.legionConversations['app:team-eng:19:g@thread.v2']).toBe('legion-1');
   });
 
   it('sends chunks with the configured AI label', async () => {
