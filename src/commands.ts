@@ -10,9 +10,13 @@ const pairingInFlight = new Set<string>();
 export interface CommandDeps {
   appId: string;
   participantId: string;
+  senderParticipantId?: string;
   aadObjectId: string;
+  senderName?: string;
   conversationKey?: string;
+  conversationId?: string;
   isFallback?: boolean;
+  isGroup?: boolean;
   text: string;
   state: TeamsState;
   ctx: ConnectorContext;
@@ -27,12 +31,19 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
 
   switch (command) {
     case '/new': {
+      const previous = deps.state.legionConversations[key];
       delete deps.state.legionConversations[key];
+      if (previous) delete deps.state.legionConversationTargets[previous];
       await deps.send('Started a new conversation.');
       return true;
     }
     case '/pair': {
       if (deps.isFallback) {
+        await deps.send('Only registered users can redeem pairing codes.');
+        return true;
+      }
+      const callerId = deps.senderParticipantId ?? (deps.isGroup ? undefined : deps.participantId);
+      if (!callerId) {
         await deps.send('Only registered users can redeem pairing codes.');
         return true;
       }
@@ -53,7 +64,7 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
           await deps.send('Pairing code is invalid or expired.');
           return true;
         }
-        const caller = deps.options.pairingParticipantId ?? deps.participantId;
+        const caller = deps.options.pairingParticipantId ?? callerId;
         const { result } = await deps.ctx.callTool(caller, 'pair', {
           participantId: target,
           connector: pending.connector,
@@ -78,12 +89,20 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
       }
     }
     case '/whoami': {
-      const conversation =
-        deps.state.legionConversations[key] ?? '(none)';
-      await deps.send(
-        `Participant: ${deps.participantId}\nTeams ID: ${deps.aadObjectId}\n` +
-        `Bot app: ${deps.appId}\nConversation: ${conversation}`,
-      );
+      const conversation = deps.state.legionConversations[key] ?? '(none)';
+      if (deps.isGroup) {
+        await deps.send(
+          `Participant: ${deps.participantId}\n` +
+          `Group conversation ID: ${deps.conversationId ?? '(unknown)'}\n` +
+          `Sender: ${deps.senderName ?? deps.aadObjectId}\n` +
+          `Bot app: ${deps.appId}\nConversation: ${conversation}`,
+        );
+      } else {
+        await deps.send(
+          `Participant: ${deps.participantId}\nTeams ID: ${deps.aadObjectId}\n` +
+          `Bot app: ${deps.appId}\nConversation: ${conversation}`,
+        );
+      }
       return true;
     }
     case '/help': {

@@ -134,4 +134,75 @@ describe('commands', () => {
   it('returns false for plain text', async () => {
     await expect(handleCommand(deps('hello').deps)).resolves.toBe(false);
   });
+
+  it('clears the group conversation and its target map entry on /new', async () => {
+    const { deps: d, sent } = deps('/new', {
+      participantId: 'team-eng',
+      isGroup: true,
+      conversationKey: 'app:team-eng:19:g@thread.v2',
+      conversationId: '19:g@thread.v2',
+    });
+    d.state.legionConversations['app:team-eng:19:g@thread.v2'] = 'legion-1';
+    d.state.legionConversationTargets['legion-1'] = 'app:team-eng:19:g@thread.v2';
+    await expect(handleCommand(d)).resolves.toBe(true);
+    expect(d.state.legionConversations['app:team-eng:19:g@thread.v2']).toBeUndefined();
+    expect(d.state.legionConversationTargets['legion-1']).toBeUndefined();
+    expect(sent[0]).toMatch(/new conversation/i);
+  });
+
+  it('shows group identity details on /whoami', async () => {
+    const { deps: d, sent } = deps('/whoami', {
+      participantId: 'team-eng',
+      senderName: 'Alice',
+      isGroup: true,
+      conversationKey: 'app:team-eng:19:g@thread.v2',
+      conversationId: '19:g@thread.v2',
+    });
+    await expect(handleCommand(d)).resolves.toBe(true);
+    expect(sent[0]).toContain('Participant: team-eng');
+    expect(sent[0]).toContain('Group conversation ID: 19:g@thread.v2');
+    expect(sent[0]).toContain('Sender: Alice');
+    expect(sent[0]).toContain('Bot app: app');
+  });
+
+  it('runs /pair as the typing human in a group and uses the pending group identity', async () => {
+    const { deps: d, callTool, sent } = deps('/pair', {
+      participantId: 'team-eng',
+      senderParticipantId: 'alice',
+      isGroup: true,
+      conversationKey: 'app:team-eng:19:g@thread.v2',
+      conversationId: '19:g@thread.v2',
+    });
+    const code = rememberPendingPair(
+      d.state,
+      { appId: 'app', connector: 'teams-group', externalId: '19:g@thread.v2' },
+      600,
+    );
+    await handleCommand({ ...d, text: `/pair ${code} team-eng` });
+    expect(callTool).toHaveBeenCalledWith('alice', 'pair', {
+      participantId: 'team-eng',
+      connector: 'teams-group',
+      externalId: '19:g@thread.v2',
+    });
+    expect(sent[0]).toMatch(/Paired team-eng with Teams group identity 19:g@thread\.v2/);
+    expect(d.state.pendingPairs[code]).toBeUndefined();
+  });
+
+  it('rejects /pair from an unregistered human in a group', async () => {
+    const { deps: d, callTool, sent } = deps('/pair', {
+      participantId: 'team-eng',
+      isGroup: true,
+      conversationKey: 'app:team-eng:19:g@thread.v2',
+      conversationId: '19:g@thread.v2',
+    });
+    const code = rememberPendingPair(
+      d.state,
+      { appId: 'app', connector: 'teams-group', externalId: '19:g@thread.v2' },
+      600,
+    );
+    await handleCommand({ ...d, text: `/pair ${code} team-eng` });
+    expect(callTool).not.toHaveBeenCalled();
+    expect(sent[0]).toBe('Only registered users can redeem pairing codes.');
+    expect(d.state.pendingPairs[code]).toBeDefined();
+  });
 });
