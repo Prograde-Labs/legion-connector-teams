@@ -42,17 +42,20 @@ describe('render', () => {
     }));
   });
 
-  it('builds a rejected approval card that shows the reason', () => {
+  it('builds a rejected approval card that shows the reason and decider', () => {
     const card = decidedApprovalCard({
       outcome: 'rejected',
       tool: 'file_write',
       argsText: '{"path":"test.txt"}',
       requesterId: 'assistant',
       message: 'Not on a Friday',
+      decidedBy: 'Alice',
     });
     expect(card.actions ?? []).toHaveLength(0);
     expect(JSON.stringify(card)).toContain('Rejected');
     expect(JSON.stringify(card)).toContain('Not on a Friday');
+    expect(JSON.stringify(card)).toContain('Decided by');
+    expect(JSON.stringify(card)).toContain('Alice');
   });
 
   it('builds a decided approval card without actions', () => {

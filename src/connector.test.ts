@@ -76,7 +76,11 @@ describe('TeamsConnector', () => {
       const record = async () => (await new StateStore(dir).load()).conversations['app:alice'];
       await handlers.onInstall(entry, context('personal', 'personal-id'));
       const personal = await record();
-      expect(personal.conversationId).toBe('personal-id');
+      expect(personal).toMatchObject({
+        conversationId: 'personal-id',
+        conversationType: 'personal',
+        externalId: 'aad-1',
+      });
       await handlers.onConversationUpdate(entry, context('groupChat', 'group-id'));
       expect(await record()).toEqual(personal);
       await handlers.onInstall(entry, context('personal'));
@@ -86,7 +90,7 @@ describe('TeamsConnector', () => {
     } finally { await connector.stop(); }
   });
 
-  it('returns an Adaptive Card invoke response and rejects non-personal chats, retired or foreign actors', async () => {
+  it('returns an Adaptive Card invoke response and rejects channels, retired or foreign actors', async () => {
     const { app, deps, participants } = setup();
     const factory = vi.fn<TeamsAppFactory>(() => app);
     const dir = await mkdtemp(join(tmpdir(), 'teams-approval-'));
@@ -105,7 +109,7 @@ describe('TeamsConnector', () => {
       const [entry, handlers] = factory.mock.calls[0];
       const send = vi.fn();
       const invoke = (id: string, conversationType = 'personal') => handlers.onApproval(entry, { send, activity: {
-        from: { aadObjectId: 'aad-1' }, channelData: { tenant: { id } },
+        from: { aadObjectId: 'aad-1', name: 'Alice' }, channelData: { tenant: { id } },
         conversation: { conversationType },
         value: { action: { data: {
           approvalId: 'ap-1',
@@ -115,14 +119,17 @@ describe('TeamsConnector', () => {
         } } },
       } } as never, 'approve');
       expect(await invoke('other')).toHaveProperty('body.value', 'This bot is not available in your tenant.');
-      expect(await invoke('t', 'groupChat')).toHaveProperty('body.value', 'Only personal chats are supported.');
+      expect(await invoke('t', 'channel')).toHaveProperty(
+        'body.value', 'Only personal chats and group chats are supported.',
+      );
       expect(callTool).not.toHaveBeenCalled();
-      const approved = await invoke('t');
+      const approved = await invoke('t', 'groupChat');
       expect(approved).toMatchObject({ status: 200, body: {
         statusCode: 200, type: 'application/vnd.microsoft.card.adaptive',
       } });
       expect(JSON.stringify(approved.body)).toContain('Approved');
-      expect(JSON.stringify(approved.body)).toContain('file_write');
+      expect(JSON.stringify(approved.body)).toContain('Decided by');
+      expect(JSON.stringify(approved.body)).toContain('Alice');
       expect((approved.body as { value?: { actions?: unknown[] } }).value?.actions ?? []).toHaveLength(0);
       participants[1].status = 'retired';
       expect(await invoke('t')).toHaveProperty('body.value', 'Not registered.');
@@ -132,6 +139,31 @@ describe('TeamsConnector', () => {
       });
       expect(send).toHaveBeenCalledOnce();
       expect(JSON.stringify(send.mock.calls[0][0])).toContain('resumed text');
+    } finally { await connector.stop(); }
+  });
+
+  it('rejects group approval actions when group chats are disabled', async () => {
+    const { app, deps } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-approval-disabled-'));
+    const connector = new TeamsConnector(
+      { stateDir: dir, transport: 'socket', groupChats: false }, deps, factory,
+    );
+    const callTool = vi.fn(async () => ({ result: { status: 'success' }, conversationId: 'c' }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      const result = await handlers.onApproval(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'groupChat' },
+          value: { action: { data: { approvalId: 'ap-1' } } },
+        },
+      } as never, 'approve');
+      expect(result).toHaveProperty('body.value', 'Only personal chats are supported.');
+      expect(callTool).not.toHaveBeenCalled();
     } finally { await connector.stop(); }
   });
 

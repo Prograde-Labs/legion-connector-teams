@@ -132,12 +132,16 @@ export class TeamsConnector implements Connector {
   ): Promise<CardInvokeResponse> {
     if (!this.ctx) return approvalResponse('This bot is not available.');
     if (!isBotTenant(bot, context.activity)) return approvalResponse(tenantMismatchText);
-    if (context.activity.conversation?.conversationType !== 'personal') {
-      return approvalResponse('Only personal chats are supported.');
+    const conversationType = context.activity.conversation?.conversationType;
+    if (conversationType !== 'personal' && !(conversationType === 'groupChat' && this.options.groupChats)) {
+      return approvalResponse(this.options.groupChats
+        ? 'Only personal chats and group chats are supported.'
+        : 'Only personal chats are supported.');
     }
     const aadObjectId = readTeamsId(context.activity.from);
     const participant = aadObjectId ? findTeamsActor(this.deps.collective, aadObjectId) : undefined;
     if (!participant) return approvalResponse('Not registered.');
+    const deciderName = participant.name ?? context.activity.from?.name ?? participant.id;
     const actionData = (context.activity.value?.action?.data ?? {}) as {
       approvalId?: string;
       tool?: string;
@@ -196,6 +200,7 @@ export class TeamsConnector implements Connector {
         requesterId: actionData.requesterId,
         outcome: decided,
         ...(reason === undefined ? {} : { message: reason }),
+        decidedBy: deciderName,
       }),
     );
   }

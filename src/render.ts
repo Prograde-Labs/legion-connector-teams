@@ -109,6 +109,7 @@ export interface DecidedApprovalView {
   requesterId?: string;
   outcome: 'approved' | 'rejected' | 'error';
   message?: string;
+  decidedBy?: string;
 }
 
 /** Replace an approval card with its recorded outcome, removing the actions. */
@@ -123,6 +124,7 @@ export function decidedApprovalCard(view: DecidedApprovalView): IAdaptiveCard {
   if (view.tool) facts.push({ title: 'Tool', value: view.tool });
   if (view.argsText) facts.push({ title: 'Args', value: view.argsText });
   if (view.requesterId) facts.push({ title: 'Requester', value: view.requesterId });
+  if (view.decidedBy) facts.push({ title: 'Decided by', value: view.decidedBy });
   const body: unknown[] = [{ type: 'TextBlock', text: header, weight: 'Bolder', wrap: true }];
   if (facts.length) body.push({ type: 'FactSet', facts });
   if (view.message) body.push({ type: 'TextBlock', text: view.message, wrap: true });
