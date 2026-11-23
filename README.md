@@ -61,6 +61,7 @@ Options and defaults:
 | `feedback` | `false` | Reserved for future use. |
 | `typingIntervalMs` | `4000` | Typing interval; `0` disables it. |
 | `maxMessageChars` | `20000` | Outbound message chunk size. |
+| `learnOutboundThread` | `true` | Record an outbound-initiated Legion conversation as the chat's current thread, so the Teams reply continues it. |
 
 HTTP listens on port 3978 by default, with each bot at `/teams/<participantId>/api/messages` and an unauthenticated `GET /health`. Socket Mode (`"transport": "socket"`) is experimental, intended for new bots, and opens one socket per configured geo per bot; it has no HTTP listener. Teams streaming is supported in 1:1 and group chats; team channels are not supported. Teams allows one open stream per chat, so inbound turns are serialized per conversation.
 
@@ -72,7 +73,22 @@ Users have a `teams` identity whose `externalId` is their Entra `aadObjectId` (t
 
 Group chats are modelled as one Legion `user` participant with a `teams-group` identity whose `externalId` is the Teams conversation ID. The group uses the same `unknownUserPolicy` as personal chats. With `auto-provision`, the participant ID is `teams-group-<name>-<hash>`; unnamed groups use `Teams group <hash>`. Group messages are prefixed with the sender's name by default. `/new` and `/whoami` act on the group, while `/pair` runs as the registered human who typed it. Replies are routed back through the Legion conversation target map, so a fallback participant paired to several groups still answers in the originating group.
 
-Fallback maps unknown users to one shared Legion participant (`fallbackUserId`) but keeps a separate conversation and Legion thread per Teams sender, and a separate conversation per group, so fallback conversations may now be groups as well as personal chats. Proactive delivery is best effort: the Legion conversation target map takes precedence, then an exact participant route; otherwise the bot sends to the most recently active personal fallback chat (group records are excluded from that scan). It cannot reliably target a particular fallback sender, so avoid using shared fallback for private proactive messages. An unresolved group cannot run `/pair` from inside itself; its pairing code must be redeemed from another chat with the same bot.
+Fallback maps unknown users to one shared Legion participant (`fallbackUserId`) but keeps a separate conversation and Legion thread per Teams sender, and a separate conversation per group, so fallback conversations may now be groups as well as personal chats. Proactive delivery is best effort: the Legion conversation target map takes precedence, then an exact participant route; otherwise the bot sends to the most recently active personal fallback chat (group records are excluded from that scan). It cannot reliably target a particular fallback sender, so avoid using shared fallback for private proactive messages. Proactive failures are no longer silent: they are logged and returned to the initiating `communicate` call as a `failed` or `not-reachable` outcome with a sanitized reason, and thread learning for outbound-initiated conversations is on by default (`learnOutboundThread: true`). An unresolved group cannot run `/pair` from inside itself; its pairing code must be redeemed from another chat with the same bot.
+
+## Outbound initiation
+
+A participant that owns a `teams-bot` identity can start a conversation with an
+existing Teams participant using `communicate({ to, message })`. The target must
+already exist in the collective with a `teams` (personal) or `teams-group`
+(group chat) identity. The connector reports `delivered`, `accepted`,
+`not-reachable`, or `failed`; a failed send makes the synchronous `communicate`
+call return an error with a sanitized reason.
+
+On a successful send the connector records the Legion conversation as the chat's
+current thread by default (`learnOutboundThread: true`), so the Teams user's next
+reply continues that conversation. Set `learnOutboundThread: false` to keep the
+previous thread; the conversation target map is still updated. Cold outreach,
+rosters, retries, and delivery receipts are not supported yet.
 
 ## Chat commands
 
