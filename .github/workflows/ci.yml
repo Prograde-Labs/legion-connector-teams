@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - name: Checkout connector
+        uses: actions/checkout@v4
+        with:
+          path: legion-connector-teams
+
+      # The connector resolves @legion-collective/core and @legion-collective/types
+      # from a sibling Legion checkout (file:../legion/packages/*).
+      - name: Checkout Legion core
+        uses: actions/checkout@v4
+        with:
+          repository: Prograde-Labs/legion
+          path: legion
+
+      - name: Use Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: |
+            legion/package-lock.json
+            legion-connector-teams/package-lock.json
+
+      - name: Build Legion core packages
+        working-directory: legion
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install connector dependencies
+        working-directory: legion-connector-teams
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: legion-connector-teams
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: legion-connector-teams
+        run: npm test

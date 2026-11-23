@@ -1,6 +1,6 @@
 # Legion Microsoft Teams connector
 
-The Teams connector exposes Legion participants as individual Teams bots for personal 1:1 chats and group chats. It supports text, conversation continuity, pairing, and approval cards. Team channels are not supported yet. Messages, installs, and approval actions must report the tenant configured in the bot's credentials.
+The Teams connector exposes [Legion](https://github.com/Prograde-Labs/legion) participants as individual Teams bots for personal 1:1 chats and group chats. It supports text, conversation continuity, pairing, and approval cards. Team channels are not supported yet. Messages, installs, and approval actions must report the tenant configured in the bot's credentials.
 
 ## Prerequisites and installation
 
@@ -8,8 +8,13 @@ The Teams connector exposes Legion participants as individual Teams bots for per
 - A Microsoft 365 tenant with Teams and custom-app upload/sideloading enabled. Personal Teams accounts cannot sideload custom apps. A Business Basic trial expires after about a month; durable use requires a paid seat.
 - For HTTP, a public HTTPS endpoint routed to the connector; alternatively, experimental Socket Mode needs no public endpoint.
 - For provisioning, the Teams Developer CLI (`teams`), the external `zip` command (not installed on every host), and a running Legion instance with SecretStore enabled.
+- A sibling checkout of the [Legion](https://github.com/Prograde-Labs/legion) repository. `@legion-collective/core` and `@legion-collective/types` are resolved from `../legion/packages/*` and are not yet published to npm.
 
 ```sh
+# Clone Legion next to this repository and build its core packages first.
+git clone https://github.com/Prograde-Labs/legion.git ../legion
+(cd ../legion && npm ci && npm run build)
+
 npm install
 npm run build
 ```
@@ -126,3 +131,11 @@ npm test
 A live Socket Mode integration test is available as opt-in with `LEGION_TEAMS_INTEGRATION=1` and `TEAMS_CLIENT_ID`, `TEAMS_CLIENT_SECRET`, and `TEAMS_TENANT_ID`. Do not put those credentials in source control.
 
 See [deployment](docs/deploy.md) for container, proxy, and operational notes.
+
+## Security
+
+Bot client secrets live in Legion's SecretStore under `teams-bot/<appId>`. The provisioning environment file (`<workspace>/.env.teams`) is local, mode `0600`, and must never be committed. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
