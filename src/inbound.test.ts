@@ -47,6 +47,19 @@ const activity = (text: string, aad = 'aad-1') => ({
   text,
 });
 
+const groupActivity = (text: string, overrides: Record<string, unknown> = {}) => ({
+  from: { id: '29:1', name: 'Alice', aadObjectId: 'aad-1' },
+  recipient: { id: 'bot-1' },
+  conversation: { id: '19:group@thread.v2', conversationType: 'groupChat', name: 'Engineering' },
+  channelData: { tenant: { id: 't' } },
+  serviceUrl: 'https://smba.trafficmanager.net/teams/',
+  entities: [
+    { type: 'mention', text: '<at>Assistant</at>', mentioned: { id: 'bot-1', name: 'Assistant' } },
+  ],
+  text,
+  ...overrides,
+});
+
 const captureReply = () => vi.fn(async (_value: unknown) => undefined);
 const label = { entities: [expect.objectContaining({ additionalType: ['AIGeneratedContent'] })] };
 const alice = { id: 'alice', identities: [{ connector: 'teams', externalId: 'aad-1' }] };
@@ -58,8 +71,8 @@ function inboundDeps(s: ReturnType<typeof setup>, options = {}) {
 
 describe('handleInbound', () => {
   it.each([
-    [{ conversation: { conversationType: 'groupChat' } }, 'Only personal chats are supported.'],
-    [{ conversation: { id: 'conv-1' } }, 'Only personal chats are supported.'],
+    [{ conversation: { conversationType: 'channel', id: 'channel-1' } }, 'Only personal chats and group chats are supported.'],
+    [{ conversation: { id: 'conv-1' } }, 'Only personal chats and group chats are supported.'],
     [{ channelData: { tenant: { id: 'other' } } }, 'This bot is not available in your tenant.'],
     [{ channelData: undefined }, 'This bot is not available in your tenant.'],
   ] as const)('rejects unsupported chat or tenant data before resolving identity', async (override, text) => {
@@ -70,6 +83,17 @@ describe('handleInbound', () => {
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ text }));
     expect(s.collective.findByIdentity).not.toHaveBeenCalled();
     expect(s.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects group chats when groupChats is disabled', async () => {
+    const s = setup([alice]);
+    const send = captureReply();
+    await handleInbound(
+      inboundDeps(s, { groupChats: false }),
+      { activity: groupActivity('hello'), send },
+    );
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ text: 'Only personal chats are supported.' }));
+    expect(s.collective.findByIdentity).not.toHaveBeenCalled();
   });
 
   it('lets a registered actor redeem a pending user’s code', async () => {
@@ -312,5 +336,207 @@ describe('handleInbound', () => {
     expect(send.mock.calls[0][0]).toHaveProperty('text', `${stage === 'pair' ? 'Pairing' : 'Provisioning'} failed: tool unavailable`);
     expect(s.streamTool).not.toHaveBeenCalled();
     expect(s.ctx.registry.setActive).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleInbound group chats', () => {
+  const group = {
+    id: 'team-eng', name: 'Engineering', type: 'user', tools: {}, status: 'active',
+    identities: [{ connector: 'teams-group', externalId: '19:group@thread.v2' }],
+  };
+
+  it('communicates as the group participant with attribution', async () => {
+    const s = setup([alice, group]);
+    const send = captureReply();
+    await handleInbound(inboundDeps(s), { activity: groupActivity('hello'), send });
+    const key = 'app:team-eng:19:group@thread.v2';
+    expect(s.streamTool).toHaveBeenCalledWith('team-eng', 'communicate', expect.objectContaining({
+      to: 'assistant',
+      message: '[Alice]: hello',
+      conversationId: undefined,
+    }));
+    expect(s.state.conversations[key]).toMatchObject({
+      conversationId: '19:group@thread.v2',
+      conversationType: 'groupChat',
+      externalId: '19:group@thread.v2',
+      name: 'Engineering',
+    });
+    expect(s.state.legionConversations[key]).toBe('thread-1');
+    expect(s.state.legionConversationTargets['thread-1']).toBe(key);
+    expect(s.ctx.registry.setActive).toHaveBeenCalledWith('team-eng', 'teams');
+  });
+
+  it('removes only the bot mention and preserves human mentions', async () => {
+    const s = setup([alice, group]);
+    const send = captureReply();
+    const activity = groupActivity('<at>Assistant</at> <at>Bob</at> please review', {
+      entities: [
+        { type: 'mention', text: '<at>Assistant</at>', mentioned: { id: 'bot-1', name: 'Assistant' } },
+        { type: 'mention', text: '<at>Bob</at>', mentioned: { id: 'human-2', name: 'Bob' } },
+      ],
+    });
+    await handleInbound(inboundDeps(s), { activity, send });
+    expect(s.streamTool).toHaveBeenCalledWith('team-eng', 'communicate', expect.objectContaining({
+      message: '[Alice]: <at>Bob</at> please review',
+    }));
+  });
+
+  it('sends an empty message for a bare mention', async () => {
+    const s = setup([alice, group]);
+    const send = captureReply();
+    await handleInbound(inboundDeps(s), { activity: groupActivity('<at>Assistant</at>'), send });
+    expect(s.streamTool).toHaveBeenCalledWith('team-eng', 'communicate', expect.objectContaining({
+      message: '',
+    }));
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ text: 'Empty message.' }));
+  });
+
+  it('can disable attribution', async () => {
+    const s = setup([alice, group]);
+    await handleInbound(
+      inboundDeps(s, { groupSenderPrefix: null }),
+      { activity: groupActivity('hello'), send: captureReply() },
+    );
+    expect(s.streamTool).toHaveBeenCalledWith('team-eng', 'communicate', expect.objectContaining({
+      message: 'hello',
+    }));
+  });
+
+  it('issues a pairing code for an unknown group', async () => {
+    const s = setup([alice]);
+    const send = captureReply();
+    await handleInbound(inboundDeps(s), { activity: groupActivity('hello'), send });
+    const [code, pending] = Object.entries(s.state.pendingPairs)[0];
+    expect(pending).toMatchObject({
+      appId: 'app', connector: 'teams-group', externalId: '19:group@thread.v2',
+    });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(/isn't registered.*Group ID: 19:group@thread\.v2/),
+    }));
+    expect(s.streamTool).not.toHaveBeenCalled();
+    expect(code).toMatch(/^[2-9A-HJ-NP-Z]{6}$/);
+  });
+
+  it('tells a rejected group how to register', async () => {
+    const s = setup([alice]);
+    const send = captureReply();
+    await handleInbound(
+      inboundDeps(s, { unknownUserPolicy: 'reject' }),
+      { activity: groupActivity('hello'), send },
+    );
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(/19:group@thread\.v2.*administrator/i),
+    }));
+  });
+
+  it('auto-provisions and pairs an unknown group', async () => {
+    const s = setup([alice]);
+    const send = captureReply();
+    await handleInbound(
+      inboundDeps(s, { unknownUserPolicy: 'auto-provision' }),
+      { activity: groupActivity('hello'), send },
+    );
+    expect(s.callTool).toHaveBeenCalledWith('operator', 'create_user', expect.objectContaining({
+      id: 'teams-group-engineering-eqrgnh',
+      name: 'Engineering',
+      tools: { communicate: 'auto', approval_response: 'auto' },
+    }));
+    expect(s.callTool).toHaveBeenCalledWith('operator', 'pair', {
+      participantId: 'teams-group-engineering-eqrgnh',
+      connector: 'teams-group',
+      externalId: '19:group@thread.v2',
+    });
+    expect(send.mock.calls[0][0]).toHaveProperty('text', expect.stringMatching(/Welcome/));
+    expect(s.streamTool).not.toHaveBeenCalled();
+  });
+
+  it('isolates fallback group conversations by conversation id', async () => {
+    const s = setup([alice, { id: 'operator', name: 'Operator', type: 'user', tools: {}, status: 'active' }]);
+    const deps = inboundDeps(s, { unknownUserPolicy: 'fallback', fallbackUserId: 'operator' });
+    const send = captureReply();
+    s.streamTool
+      .mockResolvedValueOnce({
+        conversationId: 'conv-1',
+        gen: (async function* (): AsyncGenerator<StreamChunk> {
+          yield { type: 'text_delta', delta: 'Hi' };
+          yield { type: 'stream:done', result: { status: 'success', data: { conversationId: 'thread-g1' } } };
+        })(),
+      })
+      .mockResolvedValueOnce({
+        conversationId: 'conv-1',
+        gen: (async function* (): AsyncGenerator<StreamChunk> {
+          yield { type: 'text_delta', delta: 'Hi' };
+          yield { type: 'stream:done', result: { status: 'success', data: { conversationId: 'thread-g2' } } };
+        })(),
+      });
+    for (const conversationId of ['19:g1@thread.v2', '19:g2@thread.v2']) {
+      await handleInbound(deps, {
+        activity: groupActivity('hello', {
+          conversation: { id: conversationId, conversationType: 'groupChat', name: conversationId },
+        }),
+        send,
+      });
+    }
+    expect(s.streamTool).toHaveBeenNthCalledWith(1, 'operator', 'communicate', expect.objectContaining({
+      message: '[Alice]: hello',
+    }));
+    expect(s.state.conversations).toMatchObject({
+      'app:operator:19:g1@thread.v2': { conversationId: '19:g1@thread.v2' },
+      'app:operator:19:g2@thread.v2': { conversationId: '19:g2@thread.v2' },
+    });
+    expect(s.state.legionConversationTargets).toEqual({
+      'thread-g1': 'app:operator:19:g1@thread.v2',
+      'thread-g2': 'app:operator:19:g2@thread.v2',
+    });
+  });
+
+  it('handles /new on the group key without calling communicate', async () => {
+    const s = setup([alice, group]);
+    const key = 'app:team-eng:19:group@thread.v2';
+    s.state.legionConversations[key] = 'old';
+    s.state.legionConversationTargets['old'] = key;
+    const send = captureReply();
+    await handleInbound(inboundDeps(s), { activity: groupActivity('/new'), send });
+    expect(s.state.legionConversations[key]).toBeUndefined();
+    expect(s.state.legionConversationTargets['old']).toBeUndefined();
+    expect(s.streamTool).not.toHaveBeenCalled();
+  });
+
+  it('runs /pair as the typing human in a group', async () => {
+    const s = setup([alice, group]);
+    const code = rememberPendingPair(
+      s.state,
+      { appId: 'app', connector: 'teams-group', externalId: '19:other@thread.v2' },
+      600,
+    );
+    await handleInbound(inboundDeps(s), {
+      activity: groupActivity(`/pair ${code} team-other`),
+      send: captureReply(),
+    });
+    expect(s.callTool).toHaveBeenCalledWith('alice', 'pair', {
+      participantId: 'team-other',
+      connector: 'teams-group',
+      externalId: '19:other@thread.v2',
+    });
+    expect(s.state.pendingPairs[code]).toBeUndefined();
+  });
+
+  it('rejects /pair from an unregistered human in a group', async () => {
+    const s = setup([group]);
+    const code = rememberPendingPair(
+      s.state,
+      { appId: 'app', connector: 'teams-group', externalId: '19:other@thread.v2' },
+      600,
+    );
+    const send = captureReply();
+    await handleInbound(inboundDeps(s), {
+      activity: groupActivity(`/pair ${code} team-other`),
+      send,
+    });
+    expect(s.callTool).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Only registered users can redeem pairing codes.',
+    }));
+    expect(s.state.pendingPairs[code]).toBeDefined();
   });
 });
