@@ -89,8 +89,8 @@ export class TeamsConnector implements Connector {
     if (!ctx || !state || !store) return;
     const activity = context.activity;
     const key = activity.conversation?.conversationType === 'groupChat'
-      ? `${bot.appId}:${activity.conversation?.id ?? 'unknown'}`
-      : `${bot.appId}:${readTeamsId(activity.from) ?? 'unknown'}`;
+      ? `${bot.appId}:${activity.conversation?.id || 'unknown'}`
+      : `${bot.appId}:${readTeamsId(activity.from) || 'unknown'}`;
     await this.queue.run(key, () => handleInbound(
       {
         bot,

@@ -128,6 +128,7 @@ describe('TeamsConnector', () => {
         statusCode: 200, type: 'application/vnd.microsoft.card.adaptive',
       } });
       expect(JSON.stringify(approved.body)).toContain('Approved');
+      expect(JSON.stringify(approved.body)).toContain('file_write');
       expect(JSON.stringify(approved.body)).toContain('Decided by');
       expect(JSON.stringify(approved.body)).toContain('Alice');
       expect((approved.body as { value?: { actions?: unknown[] } }).value?.actions ?? []).toHaveLength(0);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveIdentity } from './identity.js';
+import { findGroupActor, provisionedGroupId, provisionedUserId, resolveGroupIdentity, resolveIdentity } from './identity.js';
 import { emptyState } from './state.js';
 import { resolveOptions } from './options.js';
 import type { CollectiveLike } from '@legion-collective/core';
@@ -81,8 +81,6 @@ describe('resolveIdentity', () => {
     expect(outcome.kind).toBe('reject');
   });
 });
-
-import { findGroupActor, provisionedGroupId, provisionedUserId, resolveGroupIdentity } from './identity.js';
 
 describe('group identity', () => {
   const groupIdentity = (id: string, conversationId: string) => ({

@@ -111,6 +111,14 @@ describe('handleInbound', () => {
     expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ text: expect.stringContaining('Paired bob'), ...label }));
   });
 
+  it('replies Empty message. for blank personal text', async () => {
+    const s = setup([alice]);
+    const send = captureReply();
+    await handleInbound(inboundDeps(s), { activity: activity('   '), send });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ text: 'Empty message.', ...label }));
+    expect(s.streamTool).not.toHaveBeenCalled();
+  });
+
   it('isolates fallback senders and does not let them redeem pairing codes', async () => {
     const s = setup([alice]);
     const send = captureReply();
@@ -364,6 +372,22 @@ describe('handleInbound group chats', () => {
     expect(s.state.legionConversations[key]).toBe('thread-1');
     expect(s.state.legionConversationTargets['thread-1']).toBe(key);
     expect(s.ctx.registry.setActive).toHaveBeenCalledWith('team-eng', 'teams');
+  });
+
+  it('preserves mentions when the activity has no recipient', async () => {
+    const s = setup([alice, group]);
+    const send = captureReply();
+    const activity = groupActivity('<at>Assistant</at> <at>Bob</at> please review', {
+      recipient: undefined,
+      entities: [
+        { type: 'mention', text: '<at>Assistant</at>', mentioned: { id: 'bot-1', name: 'Assistant' } },
+        { type: 'mention', text: '<at>Bob</at>', mentioned: { id: 'human-2', name: 'Bob' } },
+      ],
+    });
+    await handleInbound(inboundDeps(s), { activity, send });
+    expect(s.streamTool).toHaveBeenCalledWith('team-eng', 'communicate', expect.objectContaining({
+      message: '[Alice]: <at>Assistant</at> <at>Bob</at> please review',
+    }));
   });
 
   it('removes only the bot mention and preserves human mentions', async () => {

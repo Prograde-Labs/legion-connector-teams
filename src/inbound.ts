@@ -93,8 +93,9 @@ function upsertGroupConversation(
 }
 
 function stripBotMention(activity: TeamsActivity): string {
+  if (!activity.recipient?.id) return activity.text?.trim() ?? '';
   return stripMentionsText(activity as unknown as IMessageActivity, {
-    accountId: activity.recipient?.id,
+    accountId: activity.recipient.id,
   })?.trim() ?? '';
 }
 

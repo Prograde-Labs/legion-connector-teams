@@ -188,6 +188,53 @@ describe('commands', () => {
     expect(d.state.pendingPairs[code]).toBeUndefined();
   });
 
+  it('runs /pair as the registered human in a fallback group', async () => {
+    const { deps: d, callTool, sent } = deps('/pair', {
+      participantId: 'operator',
+      senderParticipantId: 'alice',
+      isFallback: true,
+      isGroup: true,
+      conversationKey: 'app:operator:19:g@thread.v2',
+      conversationId: '19:g@thread.v2',
+    });
+    const code = rememberPendingPair(
+      d.state,
+      { appId: 'app', connector: 'teams-group', externalId: '19:g@thread.v2' },
+      600,
+    );
+    await handleCommand({ ...d, text: `/pair ${code} team-eng` });
+    expect(callTool).toHaveBeenCalledWith('alice', 'pair', {
+      participantId: 'team-eng',
+      connector: 'teams-group',
+      externalId: '19:g@thread.v2',
+    });
+    expect(sent[0]).toMatch(/Paired team-eng/);
+    expect(d.state.pendingPairs[code]).toBeUndefined();
+  });
+
+  it('still blocks /pair in a personal fallback chat', async () => {
+    const { deps: d, callTool, sent } = deps('/pair', {
+      participantId: 'alice',
+      senderParticipantId: 'alice',
+      isFallback: true,
+    });
+    const code = rememberPendingPair(
+      d.state,
+      { appId: 'app', connector: 'teams', externalId: 'aad-9' },
+      600,
+    );
+    await handleCommand({ ...d, text: `/pair ${code} bob` });
+    expect(callTool).not.toHaveBeenCalled();
+    expect(sent[0]).toBe('Only registered users can redeem pairing codes.');
+    expect(d.state.pendingPairs[code]).toBeDefined();
+  });
+
+  it('mentions group behavior in /help', async () => {
+    const { deps: d, sent } = deps('/help');
+    await expect(handleCommand(d)).resolves.toBe(true);
+    expect(sent[0]).toContain('In a group chat, /new and /whoami act on the group; /pair runs as you.');
+  });
+
   it('rejects /pair from an unregistered human in a group', async () => {
     const { deps: d, callTool, sent } = deps('/pair', {
       participantId: 'team-eng',

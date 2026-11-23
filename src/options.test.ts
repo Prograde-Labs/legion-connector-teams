@@ -22,6 +22,11 @@ describe('resolveOptions group chat options', () => {
       .toThrow(/\{message\}/);
   });
 
+  it('rejects an empty attribution template', () => {
+    expect(() => resolveOptions({ stateDir: '/tmp/x', groupSenderPrefix: '' }))
+      .toThrow(/\{message\}/);
+  });
+
   it('can disable group chats', () => {
     expect(resolveOptions({ stateDir: '/tmp/x', groupChats: false }).groupChats).toBe(false);
   });

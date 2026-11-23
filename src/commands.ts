@@ -38,7 +38,7 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
       return true;
     }
     case '/pair': {
-      if (deps.isFallback) {
+      if (deps.isFallback && !(deps.isGroup && deps.senderParticipantId)) {
         await deps.send('Only registered users can redeem pairing codes.');
         return true;
       }
@@ -111,6 +111,7 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
         '/new — start a new conversation\n' +
         '/pair <code> <participant-id> — pair a pending Teams identity\n' +
         '/whoami — show your identity\n' +
+        'In a group chat, /new and /whoami act on the group; /pair runs as you.\n' +
         '/help — this message',
       );
       return true;
