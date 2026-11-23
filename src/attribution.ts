@@ -4,5 +4,8 @@ export function applyGroupPrefix(
   message: string,
 ): string {
   if (template === null) return message;
-  return template.replaceAll('{name}', senderName).replace('{message}', message);
+  return template.replace(
+    /\{(name|message)\}/g,
+    (_match, key: string) => (key === 'name' ? senderName : message),
+  );
 }
