@@ -81,3 +81,118 @@ describe('resolveIdentity', () => {
     expect(outcome.kind).toBe('reject');
   });
 });
+
+import { findGroupActor, provisionedGroupId, provisionedUserId, resolveGroupIdentity } from './identity.js';
+
+describe('group identity', () => {
+  const groupIdentity = (id: string, conversationId: string) => ({
+    id,
+    name: 'Engineering',
+    type: 'user',
+    tools: {},
+    status: 'active',
+    identities: [{ connector: 'teams-group', externalId: conversationId }],
+  });
+
+  it('resolves a registered group by conversation id', () => {
+    const outcome = resolveGroupIdentity({
+      collective: collective([groupIdentity('team-eng', '19:g@thread.v2')]),
+      state: emptyState(),
+      appId: 'app',
+      conversationId: '19:g@thread.v2',
+      name: 'Engineering',
+      options: options(),
+    });
+    expect(outcome).toEqual({
+      kind: 'resolved',
+      group: { participantId: 'team-eng', conversationId: '19:g@thread.v2', name: 'Engineering' },
+    });
+  });
+
+  it('issues a group pairing code for an unknown group', () => {
+    const state = emptyState();
+    const outcome = resolveGroupIdentity({
+      collective: collective([]),
+      state,
+      appId: 'app',
+      conversationId: '19:g@thread.v2',
+      options: options(),
+    });
+    expect(outcome.kind).toBe('pairing');
+    expect(Object.values(state.pendingPairs)[0]).toMatchObject({
+      appId: 'app',
+      connector: 'teams-group',
+      externalId: '19:g@thread.v2',
+    });
+  });
+
+  it('returns group auto-provision for that policy', () => {
+    const outcome = resolveGroupIdentity({
+      collective: collective([]),
+      state: emptyState(),
+      appId: 'app',
+      conversationId: '19:g@thread.v2',
+      name: 'Engineering',
+      options: options({ unknownUserPolicy: 'auto-provision' }),
+    });
+    expect(outcome).toEqual({
+      kind: 'auto-provision',
+      externalId: '19:g@thread.v2',
+      name: 'Engineering',
+    });
+  });
+
+  it('rejects an unknown group for the reject policy', () => {
+    const outcome = resolveGroupIdentity({
+      collective: collective([]),
+      state: emptyState(),
+      appId: 'app',
+      conversationId: '19:g@thread.v2',
+      options: options({ unknownUserPolicy: 'reject' }),
+    });
+    expect(outcome).toEqual({ kind: 'reject', externalId: '19:g@thread.v2' });
+  });
+
+  it('uses the fallback participant for an unknown group', () => {
+    const outcome = resolveGroupIdentity({
+      collective: collective([
+        { id: 'operator', name: 'Operator', type: 'user', tools: {}, status: 'active' },
+      ]),
+      state: emptyState(),
+      appId: 'app',
+      conversationId: '19:g@thread.v2',
+      name: 'Engineering',
+      options: options({ unknownUserPolicy: 'fallback', fallbackUserId: 'operator' }),
+    });
+    expect(outcome).toEqual({
+      kind: 'fallback',
+      group: { participantId: 'operator', conversationId: '19:g@thread.v2', name: 'Engineering' },
+    });
+  });
+
+  it('treats a retired group participant as unknown', () => {
+    const outcome = resolveGroupIdentity({
+      collective: collective([
+        { ...groupIdentity('team-old', '19:g@thread.v2'), status: 'retired' },
+      ]),
+      state: emptyState(),
+      appId: 'app',
+      conversationId: '19:g@thread.v2',
+      options: options({ unknownUserPolicy: 'reject' }),
+    });
+    expect(outcome.kind).toBe('reject');
+  });
+
+  it('builds stable, readable provisioning ids', () => {
+    expect(provisionedGroupId('Engineering', '19:group@thread.v2'))
+      .toBe('teams-group-engineering-eqrgnh');
+    expect(provisionedGroupId(undefined, '19:group@thread.v2'))
+      .toBe('teams-group-group-eqrgnh');
+    expect(provisionedUserId('Alice', 'aad-1')).toBe('teams-alice-1j42js');
+  });
+
+  it('finds a group actor by conversation id', () => {
+    const found = findGroupActor(collective([groupIdentity('team-eng', '19:g@thread.v2')]), '19:g@thread.v2');
+    expect(found?.id).toBe('team-eng');
+  });
+});

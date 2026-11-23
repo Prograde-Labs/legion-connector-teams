@@ -6,7 +6,7 @@ import { handleCommand } from './commands.js';
 import { isAwaitingApproval } from './approvals.js';
 import { runCommunicate, type TeamsStreamer } from './communicate.js';
 import type { BotEntry } from './directory.js';
-import { readTeamsId, resolveIdentity } from './identity.js';
+import { readTeamsId, resolveIdentity, provisionedUserId } from './identity.js';
 import type { ResolvedOptions } from './options.js';
 import { sendText } from './render.js';
 import type { StateStore, TeamsState } from './state.js';
@@ -39,20 +39,6 @@ export interface InboundDeps {
   state: TeamsState;
   stateStore: StateStore;
   options: ResolvedOptions;
-}
-
-function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'user';
-}
-
-function hash6(value: string): string {
-  let hash = 0;
-  for (const char of value) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return hash.toString(36).padStart(6, '0').slice(0, 6);
-}
-
-export function provisionedUserId(name: string, aadObjectId: string): string {
-  return `teams-${slug(name)}-${hash6(aadObjectId)}`;
 }
 
 function upsertConversation(
