@@ -203,10 +203,10 @@ describe('runCommunicate', () => {
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ text: 'Hello world', ...aiLabel }));
   });
 
-  it('finalizes a placeholder and renders approval cards for pending_approval', async () => {
+  it('renders approval cards for pending_approval', async () => {
     const send = vi.fn(async () => undefined);
     const stream = fakeStream();
-    const result = await runCommunicate({
+    await runCommunicate({
       ctx: fakeCtx([
         {
           type: 'stream:done',
@@ -224,25 +224,7 @@ describe('runCommunicate', () => {
       options: options(), stream, send,
     });
     expect(send).toHaveBeenCalledTimes(1);
-    expect(stream.emitted).toContain('Awaiting approval…');
-    expect(stream.closed).toBe(1);
-    expect(result.approvalMessageId).toBe('m1');
-  });
-
-  it('keeps streamed text instead of a placeholder when approval follows text', async () => {
-    const send = vi.fn(async () => undefined);
-    const stream = fakeStream();
-    const result = await runCommunicate({
-      ctx: fakeCtx([
-        { type: 'text_delta', delta: 'Working on it.' },
-        { type: 'stream:done', result: { status: 'pending_approval', data: {} } },
-      ]),
-      userId: 'alice', botOwnerId: 'assistant', text: 'hi',
-      options: options(), stream, send,
-    });
-    expect(stream.emitted).toEqual(['Working on it.']);
-    expect(stream.closed).toBe(1);
-    expect(result.approvalMessageId).toBeUndefined();
+    expect(stream.updates).toContain('Awaiting approval…');
   });
 
   it('shows tool status before text', async () => {

@@ -34,12 +34,6 @@ describe('StateStore', () => {
       updatedAt: '2026-11-21T00:00:00.000Z',
     };
     state.legionConversationTargets['thread-1'] = 'app:group:19:g@thread.v2';
-    state.approvalMessages['ap-1'] = {
-      appId: 'app',
-      conversationId: 'conv-1',
-      messageId: 'm1',
-      createdAt: '2026-11-22T00:00:00.000Z',
-    };
     await store.save(state);
     await expect(store.load()).resolves.toEqual(state);
   });
@@ -111,7 +105,6 @@ describe('StateStore', () => {
       },
       legionConversations: { 'app:alice': 'thread-1' },
       legionConversationTargets: {},
-      approvalMessages: {},
     });
   });
 
@@ -161,7 +154,6 @@ describe('StateStore', () => {
       },
       legionConversations: {},
       legionConversationTargets: {},
-      approvalMessages: {},
     });
   });
 

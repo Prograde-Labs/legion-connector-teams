@@ -165,39 +165,6 @@ describe('handleInbound', () => {
     expect(s.save).toHaveBeenCalled();
   });
 
-  it('tracks the approval placeholder for a paused turn', async () => {
-    const s = setup([alice]);
-    s.streamTool.mockResolvedValueOnce({
-      conversationId: 'conv-1',
-      gen: (async function* (): AsyncGenerator<StreamChunk> {
-        yield {
-          type: 'stream:done',
-          result: {
-            status: 'pending_approval',
-            data: {
-              conversationId: 'thread-1',
-              approvalRequests: [
-                { approvalId: 'ap-1', requesterId: 'assistant', tool: 'communicate', args: {} },
-              ],
-            },
-          },
-        };
-      })(),
-    });
-    const stream = {
-      emit: vi.fn(),
-      update: vi.fn(),
-      async close() { return { id: 'm-placeholder' }; },
-    };
-    await handleInbound(inboundDeps(s), { activity: activity('hello'), send: captureReply(), stream });
-    expect(s.state.approvalMessages['ap-1']).toMatchObject({
-      appId: 'app',
-      conversationId: 'conv-1',
-      messageId: 'm-placeholder',
-    });
-    expect(s.save).toHaveBeenCalled();
-  });
-
   it('persists the returned thread even when the tool card edit fails', async () => {
     const s = setup([alice]);
     s.streamTool.mockResolvedValueOnce({

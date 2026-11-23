@@ -1,6 +1,5 @@
 // src/connector.ts
 import type { Connector, ConnectorContext, ConnectorRuntimeDeps } from '@legion-collective/core';
-import { MessageActivityInput } from '@microsoft/teams.api';
 import { handleApprovalAction, sendResumed, type ResumedItem } from './approvals.js';
 import { BotPool, defaultAppFactory, type CardInvokeResponse, type TeamsAppFactory } from './bot-pool.js';
 import { buildDirectory, type BotEntry } from './directory.js';
@@ -186,31 +185,6 @@ export class TeamsConnector implements Connector {
     if (!decided) {
       return approvalResponse(`Approval failed: ${outcome ?? 'unknown outcome'}`);
     }
-
-    // Replace the "Awaiting approval…" placeholder left by the paused turn.
-    // It is only tracked when the turn streamed no text; the decided card is
-    // returned separately as the invoke response.
-    const state = this.state;
-    const record = state?.approvalMessages[approvalId];
-    const clickedConversationId = context.activity.conversation?.id;
-    if (
-      state && record && record.appId === bot.appId &&
-      (record.conversationId === undefined || record.conversationId === clickedConversationId)
-    ) {
-      const text = decided === 'approved'
-        ? `✅ Approved by ${deciderName}.`
-        : `❌ Rejected by ${deciderName}.`;
-      try {
-        const activity = new MessageActivityInput(text);
-        activity.id = record.messageId;
-        await context.send(activity);
-      } catch (error) {
-        console.error('Teams approval message update failed', describeError(error));
-      }
-      delete state.approvalMessages[approvalId];
-      await this.store?.save(state);
-    }
-
     const resumed = (result.data as { resumed?: ResumedItem[] } | undefined)?.resumed;
     if (resumed?.length) {
       try {
