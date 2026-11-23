@@ -9,6 +9,7 @@ import { handleInbound, isBotTenant, tenantMismatchText, type TeamsContextLike }
 import { deliverMessage } from './outbound.js';
 import { decidedApprovalCard } from './render.js';
 import { resolveOptions, type ResolvedOptions, type TeamsConnectorOptions } from './options.js';
+import { SerialQueue } from './serialize.js';
 import { StateStore, type TeamsState } from './state.js';
 
 function approvalResponse(value: string): CardInvokeResponse {
@@ -32,6 +33,7 @@ export class TeamsConnector implements Connector {
   private stopping = false;
   private inFlight?: Promise<void>;
   private readonly options: ResolvedOptions;
+  private readonly queue = new SerialQueue();
 
   constructor(
     options: TeamsConnectorOptions,
@@ -83,18 +85,23 @@ export class TeamsConnector implements Connector {
   }
 
   private async onMessage(bot: BotEntry, context: TeamsContextLike): Promise<void> {
-    if (!this.ctx || !this.state || !this.store) return;
-    await handleInbound(
+    const { ctx, state, store } = this;
+    if (!ctx || !state || !store) return;
+    const activity = context.activity;
+    const key = activity.conversation?.conversationType === 'groupChat'
+      ? `${bot.appId}:${activity.conversation?.id ?? 'unknown'}`
+      : `${bot.appId}:${readTeamsId(activity.from) ?? 'unknown'}`;
+    await this.queue.run(key, () => handleInbound(
       {
         bot,
-        ctx: this.ctx,
+        ctx,
         collective: this.deps.collective,
-        state: this.state,
-        stateStore: this.store,
+        state,
+        stateStore: store,
         options: this.options,
       },
       context,
-    );
+    ));
   }
 
   private async onInstall(bot: BotEntry, context: TeamsContextLike): Promise<void> {
