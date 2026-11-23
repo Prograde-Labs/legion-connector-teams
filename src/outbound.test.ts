@@ -39,6 +39,81 @@ describe('deliverMessage', () => {
     expect(s.send).toHaveBeenLastCalledWith('exact', expect.objectContaining({ text: 'hello' }));
     expect(s.create).not.toHaveBeenCalled();
   });
+  it('sends approval cards after the message', async () => {
+    const s = setup(
+      [
+        { id: 'assistant', name: 'Assistant', type: 'agent', tools: {},
+          identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'alice', name: 'Alice', type: 'user', tools: {},
+          identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+      ],
+      { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } },
+    );
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', tenantId: 'tenant-1' }) },
+      {
+        senderId: 'assistant',
+        recipientId: 'alice',
+        conversationId: 'legion-1',
+        content: 'hello',
+        approvalRequests: [
+          {
+            approvalId: 'appr-1',
+            conversationId: 'legion-1',
+            requesterId: 'assistant',
+            tool: 'write_file',
+            args: { path: 'notes.txt' },
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      },
+    );
+    expect(s.send).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(s.send.mock.calls[1][1])).toContain('Approval requested');
+  });
+
+  it('still delivers and saves state when approval card rendering fails', async () => {
+    const s = setup(
+      [
+        { id: 'assistant', name: 'Assistant', type: 'agent', tools: {},
+          identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'alice', name: 'Alice', type: 'user', tools: {},
+          identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+      ],
+      { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } },
+    );
+    s.send.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('card down'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(
+        deliverMessage(
+          { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+            apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', tenantId: 'tenant-1' }) },
+          {
+            senderId: 'assistant',
+            recipientId: 'alice',
+            conversationId: 'legion-1',
+            content: 'hello',
+            approvalRequests: [
+              {
+                approvalId: 'appr-1',
+                conversationId: 'legion-1',
+                requesterId: 'assistant',
+                tool: 'write_file',
+                args: {},
+                createdAt: '2026-01-01T00:00:00.000Z',
+              },
+            ],
+          },
+        ),
+      ).resolves.toEqual({ status: 'delivered' });
+      expect(s.save).toHaveBeenCalledWith(s.state);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('prefers the latest personal fallback over a newer group record', async () => {
     const s = setup(
       [
@@ -125,6 +200,31 @@ describe('deliverMessage', () => {
       reason: "sender 'assistant' has no live Teams bot",
     });
     expect(s.send).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the replyTo participant bot when the sender has no Teams bot', async () => {
+    const s = setup(
+      [
+        { id: 'assistant', name: 'Assistant', type: 'agent', tools: {},
+          identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'quiet', name: 'Quiet', type: 'service', tools: {} },
+        { id: 'alice', name: 'Alice', type: 'user', tools: {},
+          identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+      ],
+      { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } },
+    );
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', tenantId: 'tenant-1' }) },
+      {
+        senderId: 'quiet',
+        recipientId: 'alice',
+        conversationId: 'legion-1',
+        replyTo: 'assistant',
+        content: 'hello',
+      },
+    );
+    expect(s.send).toHaveBeenCalledWith('conv-1', expect.objectContaining({ text: 'hello' }));
   });
 
   it('reports failed and logs a sanitized Teams send error', async () => {

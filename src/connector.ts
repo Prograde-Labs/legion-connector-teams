@@ -1,5 +1,6 @@
 // src/connector.ts
 import type {
+  ApprovalRequestView,
   Connector,
   ConnectorContext,
   ConnectorRuntimeDeps,
@@ -226,6 +227,7 @@ export class TeamsConnector implements Connector {
     replyTo?: string;
     content: string;
     timestamp: string;
+    approvalRequests?: ApprovalRequestView[];
   }): Promise<DeliveryOutcome> {
     if (!this.state || !this.store || !this.pool) {
       return { status: 'not-reachable', reason: 'Teams connector is not started' };
