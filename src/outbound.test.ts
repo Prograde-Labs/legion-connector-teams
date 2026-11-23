@@ -30,7 +30,7 @@ describe('deliverMessage', () => {
       'app:alice-two:aad-1': { conversationId: 'unrelated', updatedAt: '2026-11-22T00:00:00Z' },
     });
     const deps = { ...s, state: s.state as never, stateStore: { save: s.save } as never, options: resolveOptions({}) };
-    const message = { senderId: 'assistant', recipientId: 'alice', content: 'hello' };
+    const message = { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' };
     await deliverMessage(deps, message);
     expect(s.send).toHaveBeenLastCalledWith('newer', expect.objectContaining({ text: 'hello' }));
     s.state.conversations['app:alice'] = { conversationId: 'exact', updatedAt: '2026-11-19T00:00:00Z' };
@@ -51,7 +51,7 @@ describe('deliverMessage', () => {
     await deliverMessage(
       { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
         apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', tenantId: 'tenant-1' }) },
-      { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+      { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
     );
     expect(s.send).toHaveBeenCalledWith('conv-1', expect.anything());
     expect(s.create).not.toHaveBeenCalled();
@@ -67,7 +67,7 @@ describe('deliverMessage', () => {
     await deliverMessage(
       { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
         apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', tenantId: 'tenant-1' }) },
-      { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+      { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
     );
     expect(s.create).toHaveBeenCalledWith(expect.objectContaining({
       members: [{ id: 'aad-1' }],
@@ -80,6 +80,7 @@ describe('deliverMessage', () => {
       externalId: 'aad-1',
       tenantId: 'tenant-1',
     }));
+    expect(s.state.legionConversationTargets['legion-1']).toBe('app:alice');
     expect(s.save).toHaveBeenCalledWith(s.state);
     expect(s.send.mock.calls).toEqual([['conv-new', expect.objectContaining({ text: 'hello' })]]);
   });
@@ -93,7 +94,7 @@ describe('deliverMessage', () => {
     await deliverMessage(
       { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
         apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
-      { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+      { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
     );
     expect(s.send).not.toHaveBeenCalled();
   });
@@ -109,7 +110,7 @@ describe('deliverMessage', () => {
       await expect(deliverMessage(
         { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
           apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
-        { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+        { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
       )).resolves.toBeUndefined();
       expect(log).toHaveBeenCalledWith('Teams message delivery failed', 'Error: 403 Bearer [redacted]');
       expect(JSON.stringify(log.mock.calls)).not.toContain('abc123');
@@ -130,7 +131,7 @@ describe('deliverMessage', () => {
       await expect(deliverMessage(
         { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
           apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
-        { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+        { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
       )).resolves.toBeUndefined();
       expect(log).toHaveBeenCalledWith('Teams conversation creation failed', 'Error: 403 Bearer [redacted]');
       expect(JSON.stringify(log.mock.calls)).not.toContain('abc123');
@@ -149,7 +150,7 @@ describe('deliverMessage', () => {
     ]);
     const deps = { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
       apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) };
-    const message = { senderId: 'assistant', recipientId: 'alice', content: 'hello' };
+    const message = { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' };
     await deliverMessage(deps, message);
     expect(s.create).not.toHaveBeenCalled();
     (s.collective.get('assistant')!.identities![0]).externalId = 'app';
@@ -165,7 +166,7 @@ describe('deliverMessage', () => {
     await deliverMessage(
       { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
         apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', maxMessageChars: 3, aiLabel: false }) },
-      { senderId: 'assistant', recipientId: 'alice', content: 'abcdef' },
+      { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'abcdef' },
     );
     expect(s.send).toHaveBeenCalledTimes(2);
     expect(s.send.mock.calls.map((call: unknown[]) => call[1])).toEqual([
@@ -176,10 +177,73 @@ describe('deliverMessage', () => {
     await deliverMessage(
       { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
         apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x', aiLabel: true }) },
-      { senderId: 'assistant', recipientId: 'alice', content: 'hello' },
+      { senderId: 'assistant', recipientId: 'alice', conversationId: 'legion-1', content: 'hello' },
     );
     expect(s.send.mock.calls[0][1]).toHaveProperty('entities', [
       expect.objectContaining({ additionalType: ['AIGeneratedContent'] }),
     ]);
+  });
+
+  it('routes a Legion conversation to its target group', async () => {
+    const s = setup(
+      [
+        { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'team-eng', identities: [{ connector: 'teams-group', externalId: '19:g@thread.v2' }] },
+      ],
+      {
+        'app:team-eng:19:g@thread.v2': { conversationId: '19:g@thread.v2', updatedAt: 'now' },
+        'app:team-eng:19:other@thread.v2': { conversationId: '19:other@thread.v2', updatedAt: 'later' },
+      },
+    );
+    s.state.legionConversationTargets['legion-1'] = 'app:team-eng:19:g@thread.v2';
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
+      { senderId: 'assistant', recipientId: 'team-eng', conversationId: 'legion-1', content: 'hello' },
+    );
+    expect(s.send).toHaveBeenCalledWith('19:g@thread.v2', expect.objectContaining({ text: 'hello' }));
+    expect(s.send).not.toHaveBeenCalledWith('19:other@thread.v2', expect.anything());
+  });
+
+  it('sends directly to a teams-group identity and records the target', async () => {
+    const s = setup([
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+      { id: 'team-eng', identities: [{ connector: 'teams-group', externalId: '19:g@thread.v2' }] },
+    ]);
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
+      { senderId: 'assistant', recipientId: 'team-eng', conversationId: 'legion-1', content: 'hello' },
+    );
+    expect(s.send).toHaveBeenCalledWith('19:g@thread.v2', expect.objectContaining({ text: 'hello' }));
+    expect(s.state.conversations['app:team-eng:19:g@thread.v2']).toMatchObject({
+      conversationId: '19:g@thread.v2',
+      conversationType: 'groupChat',
+      externalId: '19:g@thread.v2',
+    });
+    expect(s.state.legionConversationTargets['legion-1']).toBe('app:team-eng:19:g@thread.v2');
+    expect(s.save).toHaveBeenCalledWith(s.state);
+    expect(s.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps fallback group replies in the originating group', async () => {
+    const s = setup(
+      [
+        { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'operator', identities: [{ connector: 'teams-group', externalId: '19:g1@thread.v2' }] },
+      ],
+      {
+        'app:operator:19:g1@thread.v2': { conversationId: '19:g1@thread.v2', updatedAt: 'now' },
+        'app:operator:19:g2@thread.v2': { conversationId: '19:g2@thread.v2', updatedAt: 'later' },
+      },
+    );
+    s.state.legionConversationTargets['legion-1'] = 'app:operator:19:g1@thread.v2';
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
+      { senderId: 'assistant', recipientId: 'operator', conversationId: 'legion-1', content: 'hello' },
+    );
+    expect(s.send).toHaveBeenCalledWith('19:g1@thread.v2', expect.objectContaining({ text: 'hello' }));
+    expect(s.send).not.toHaveBeenCalledWith('19:g2@thread.v2', expect.anything());
   });
 });
