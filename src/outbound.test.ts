@@ -38,6 +38,30 @@ describe('deliverMessage', () => {
     expect(s.send).toHaveBeenLastCalledWith('exact', expect.objectContaining({ text: 'hello' }));
     expect(s.create).not.toHaveBeenCalled();
   });
+  it('prefers the latest personal fallback over a newer group record', async () => {
+    const s = setup(
+      [
+        { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'operator' },
+      ],
+      {
+        'app:operator:aad-1': {
+          conversationId: 'personal-conv', conversationType: 'personal', updatedAt: '2026-11-20T00:00:00Z',
+        },
+        'app:operator:19:g@thread.v2': {
+          conversationId: '19:g@thread.v2', conversationType: 'groupChat', updatedAt: '2026-11-21T00:00:00Z',
+        },
+      },
+    );
+    await deliverMessage(
+      { collective: s.collective, state: s.state as never, stateStore: { save: s.save } as never,
+        apps: s.apps as never, options: resolveOptions({ stateDir: '/tmp/x' }) },
+      { senderId: 'assistant', recipientId: 'operator', conversationId: 'legion-1', content: 'hello' },
+    );
+    expect(s.send).toHaveBeenCalledWith('personal-conv', expect.objectContaining({ text: 'hello' }));
+    expect(s.send).not.toHaveBeenCalledWith('19:g@thread.v2', expect.anything());
+  });
+
   it('sends through the sender bot to a stored conversation', async () => {
     const s = setup(
       [

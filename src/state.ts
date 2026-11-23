@@ -92,24 +92,28 @@ function isV2(value: unknown): value is TeamsState {
 function migrateV1(v1: V1State): TeamsState {
   const conversations: Record<string, ConversationRecord> = {};
   for (const [key, record] of Object.entries(v1.conversations)) {
+    if (!isPlainObject(record)) continue;
+    const conversation = record as unknown as V1ConversationRecord;
     conversations[key] = {
-      conversationId: record.conversationId,
+      conversationId: conversation.conversationId,
       conversationType: 'personal',
-      ...(record.aadObjectId === undefined ? {} : { externalId: record.aadObjectId }),
-      ...(record.tenantId === undefined ? {} : { tenantId: record.tenantId }),
-      ...(record.serviceUrl === undefined ? {} : { serviceUrl: record.serviceUrl }),
-      ...(record.displayName === undefined ? {} : { displayName: record.displayName }),
-      updatedAt: record.updatedAt,
+      ...(conversation.aadObjectId === undefined ? {} : { externalId: conversation.aadObjectId }),
+      ...(conversation.tenantId === undefined ? {} : { tenantId: conversation.tenantId }),
+      ...(conversation.serviceUrl === undefined ? {} : { serviceUrl: conversation.serviceUrl }),
+      ...(conversation.displayName === undefined ? {} : { displayName: conversation.displayName }),
+      updatedAt: conversation.updatedAt,
     };
   }
 
   const pendingPairs: Record<string, PendingPair> = {};
   for (const [code, pair] of Object.entries(v1.pendingPairs)) {
+    if (!isPlainObject(pair)) continue;
+    const pending = pair as unknown as V1PendingPair;
     pendingPairs[code] = {
-      appId: pair.appId,
+      appId: pending.appId,
       connector: 'teams',
-      externalId: pair.aadObjectId,
-      expiresAt: pair.expiresAt,
+      externalId: pending.aadObjectId,
+      expiresAt: pending.expiresAt,
     };
   }
 
@@ -125,10 +129,10 @@ function migrateV1(v1: V1State): TeamsState {
 function normalizeV2(parsed: TeamsState): TeamsState {
   return {
     version: 2,
-    conversations: parsed.conversations as Record<string, ConversationRecord>,
-    pendingPairs: parsed.pendingPairs as Record<string, PendingPair>,
-    legionConversations: parsed.legionConversations as Record<string, string>,
-    legionConversationTargets: (parsed.legionConversationTargets as Record<string, string>) ?? {},
+    conversations: parsed.conversations ?? {},
+    pendingPairs: parsed.pendingPairs ?? {},
+    legionConversations: parsed.legionConversations ?? {},
+    legionConversationTargets: parsed.legionConversationTargets ?? {},
   };
 }
 

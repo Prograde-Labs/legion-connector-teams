@@ -108,6 +108,55 @@ describe('StateStore', () => {
     });
   });
 
+  it('skips null and non-object entries during v1 migration', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
+    await writeFile(join(dir, 'state.json'), JSON.stringify({
+      version: 1,
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          aadObjectId: 'aad-1',
+          updatedAt: '2026-11-21T00:00:00.000Z',
+        },
+        'app:null': null,
+        'app:array': [],
+        'app:string': 'not-a-record',
+      },
+      pendingPairs: {
+        GOOD01: {
+          appId: 'app',
+          aadObjectId: 'aad-2',
+          expiresAt: '2026-11-22T00:00:00.000Z',
+        },
+        NULL01: null,
+        STR001: 'not-a-record',
+        ARR001: [],
+      },
+      legionConversations: {},
+    }));
+    await expect(new StateStore(dir).load()).resolves.toEqual({
+      version: 2,
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          externalId: 'aad-1',
+          updatedAt: '2026-11-21T00:00:00.000Z',
+        },
+      },
+      pendingPairs: {
+        GOOD01: {
+          appId: 'app',
+          connector: 'teams',
+          externalId: 'aad-2',
+          expiresAt: '2026-11-22T00:00:00.000Z',
+        },
+      },
+      legionConversations: {},
+      legionConversationTargets: {},
+    });
+  });
+
   it('defaults a missing target map on load', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
     await writeFile(join(dir, 'state.json'), JSON.stringify({

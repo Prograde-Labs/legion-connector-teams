@@ -84,7 +84,11 @@ export async function deliverMessage(
           await deps.stateStore.save(deps.state);
         } else {
           for (const [candidateKey, candidate] of Object.entries(deps.state.conversations)) {
-            if (candidateKey.startsWith(`${key}:`) && (!record || candidate.updatedAt > record.updatedAt)) {
+            if (
+              candidateKey.startsWith(`${key}:`) &&
+              (candidate.conversationType ?? 'personal') === 'personal' &&
+              (!record || candidate.updatedAt > record.updatedAt)
+            ) {
               record = candidate;
             }
           }
