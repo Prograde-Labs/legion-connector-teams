@@ -188,11 +188,11 @@ describe('deliverMessage', () => {
     const s = setup(
       [
         { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
-        { id: 'team-eng', identities: [{ connector: 'teams-group', externalId: '19:g@thread.v2' }] },
+        { id: 'team-eng', identities: [{ connector: 'teams-group', externalId: '19:other@thread.v2' }] },
       ],
       {
-        'app:team-eng:19:g@thread.v2': { conversationId: '19:g@thread.v2', updatedAt: 'now' },
-        'app:team-eng:19:other@thread.v2': { conversationId: '19:other@thread.v2', updatedAt: 'later' },
+        'app:team-eng:19:g@thread.v2': { conversationId: '19:g@thread.v2', updatedAt: '2026-11-21T00:00:00Z' },
+        'app:team-eng:19:other@thread.v2': { conversationId: '19:other@thread.v2', updatedAt: '2026-11-22T00:00:00Z' },
       },
     );
     s.state.legionConversationTargets['legion-1'] = 'app:team-eng:19:g@thread.v2';
@@ -230,11 +230,11 @@ describe('deliverMessage', () => {
     const s = setup(
       [
         { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
-        { id: 'operator', identities: [{ connector: 'teams-group', externalId: '19:g1@thread.v2' }] },
+        { id: 'operator' },
       ],
       {
-        'app:operator:19:g1@thread.v2': { conversationId: '19:g1@thread.v2', updatedAt: 'now' },
-        'app:operator:19:g2@thread.v2': { conversationId: '19:g2@thread.v2', updatedAt: 'later' },
+        'app:operator:19:g1@thread.v2': { conversationId: '19:g1@thread.v2', updatedAt: '2026-11-21T00:00:00Z' },
+        'app:operator:19:g2@thread.v2': { conversationId: '19:g2@thread.v2', updatedAt: '2026-11-22T00:00:00Z' },
       },
     );
     s.state.legionConversationTargets['legion-1'] = 'app:operator:19:g1@thread.v2';
