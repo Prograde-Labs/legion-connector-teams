@@ -23,6 +23,8 @@ export interface TeamsConnectorOptions {
   feedback?: boolean;
   typingIntervalMs?: number;
   maxMessageChars?: number;
+  groupChats?: boolean;
+  groupSenderPrefix?: string | null;
 }
 
 export interface ResolvedOptions {
@@ -44,10 +46,18 @@ export interface ResolvedOptions {
   feedback: boolean;
   typingIntervalMs: number;
   maxMessageChars: number;
+  groupChats: boolean;
+  groupSenderPrefix: string | null;
 }
 
 export function resolveOptions(options: TeamsConnectorOptions): ResolvedOptions {
   const workspace = process.env.LEGION_WORKSPACE ?? process.cwd();
+  const groupSenderPrefix = options.groupSenderPrefix === undefined
+    ? '[{name}]: {message}'
+    : options.groupSenderPrefix;
+  if (groupSenderPrefix !== null && !groupSenderPrefix.includes('{message}')) {
+    throw new Error('groupSenderPrefix must contain {message}');
+  }
   return {
     transport: options.transport ?? 'http',
     port: options.port ?? 3978,
@@ -67,5 +77,7 @@ export function resolveOptions(options: TeamsConnectorOptions): ResolvedOptions 
     feedback: options.feedback ?? false,
     typingIntervalMs: options.typingIntervalMs ?? 4000,
     maxMessageChars: options.maxMessageChars ?? 20000,
+    groupChats: options.groupChats ?? true,
+    groupSenderPrefix,
   };
 }
