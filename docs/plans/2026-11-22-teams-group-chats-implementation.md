@@ -137,7 +137,7 @@ describe('resolveOptions group chat options', () => {
 
   it('rejects a template without a message placeholder', () => {
     expect(() => resolveOptions({ stateDir: '/tmp/x', groupSenderPrefix: '{name}' }))
-      .toThrow(/\\{message\\}/);
+      .toThrow(/\{message\}/);
   });
 
   it('can disable group chats', () => {
