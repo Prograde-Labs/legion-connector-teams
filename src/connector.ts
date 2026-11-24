@@ -1,6 +1,5 @@
 // src/connector.ts
 import type {
-  ApprovalRequestView,
   Connector,
   ConnectorContext,
   ConnectorRuntimeDeps,
@@ -13,7 +12,7 @@ import { describeError } from './errors.js';
 import { findTeamsActor, readTeamsId } from './identity.js';
 import { handleInbound, isBotTenant, tenantMismatchText, type TeamsContextLike } from './inbound.js';
 import { deliverMessage } from './outbound.js';
-import { decidedApprovalCard } from './render.js';
+import { decidedApprovalCard, type ApprovalRequest } from './render.js';
 import { resolveOptions, type ResolvedOptions, type TeamsConnectorOptions } from './options.js';
 import { SerialQueue } from './serialize.js';
 import { StateStore, type TeamsState } from './state.js';
@@ -227,7 +226,7 @@ export class TeamsConnector implements Connector {
     replyTo?: string;
     content: string;
     timestamp: string;
-    approvalRequests?: ApprovalRequestView[];
+    approvalRequests?: ApprovalRequest[];
   }): Promise<DeliveryOutcome> {
     if (!this.state || !this.store || !this.pool) {
       return { status: 'not-reachable', reason: 'Teams connector is not started' };

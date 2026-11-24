@@ -1,9 +1,9 @@
 // src/outbound.ts
-import type { ApprovalRequestView, DeliveryOutcome } from '@legion-collective/core';
+import type { DeliveryOutcome } from '@legion-collective/core';
 import type { CollectiveLike } from './directory.js';
 import { MessageActivityInput } from '@microsoft/teams.api';
 import type { ResolvedOptions } from './options.js';
-import { chunkMarkdown } from './render.js';
+import { chunkMarkdown, type ApprovalRequest } from './render.js';
 import { describeError } from './errors.js';
 import { sendApprovalCards } from './approvals.js';
 import type { ConversationRecord, StateStore, TeamsState } from './state.js';
@@ -33,7 +33,7 @@ export async function deliverMessage(
     conversationId: string;
     replyTo?: string;
     content: string;
-    approvalRequests?: ApprovalRequestView[];
+    approvalRequests?: ApprovalRequest[];
   },
 ): Promise<DeliveryOutcome> {
   const sender = deps.collective.get(message.senderId);
