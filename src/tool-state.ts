@@ -20,6 +20,13 @@ export function recordMessage(
   maxRecords: number,
 ): string {
   const key = messageKey(input.appId, input.activityId);
+  const existing = state.messages[key];
+  if (
+    existing?.legionMessageId !== undefined &&
+    state.legionMessages[existing.legionMessageId] === key
+  ) {
+    delete state.legionMessages[existing.legionMessageId];
+  }
   state.messages[key] = {
     appId: input.appId,
     conversationId: input.conversationId,

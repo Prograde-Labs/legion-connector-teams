@@ -63,6 +63,7 @@ describe('recordMessage', () => {
       direction: 'outbound',
     });
     expect(state.messages['app:act-1']?.legionMessageId).toBeUndefined();
+    expect(state.legionMessages['msg-1']).toBeUndefined();
   });
 });
 
