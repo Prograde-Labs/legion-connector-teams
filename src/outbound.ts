@@ -3,8 +3,9 @@ import type { DeliveryOutcome } from '@legion-collective/core';
 import type { CollectiveLike } from './directory.js';
 import { MessageActivityInput } from '@microsoft/teams.api';
 import type { ResolvedOptions } from './options.js';
-import { chunkMarkdown } from './render.js';
+import { chunkMarkdown, type ApprovalRequest } from './render.js';
 import { describeError } from './errors.js';
+import { sendApprovalCards } from './approvals.js';
 import type { ConversationRecord, StateStore, TeamsState } from './state.js';
 
 export interface OutboundApp {
@@ -26,11 +27,23 @@ export interface OutboundDeps {
 
 export async function deliverMessage(
   deps: OutboundDeps,
-  message: { senderId: string; recipientId: string; conversationId: string; content: string },
+  message: {
+    senderId: string;
+    recipientId: string;
+    conversationId: string;
+    replyTo?: string;
+    content: string;
+    approvalRequests?: ApprovalRequest[];
+  },
 ): Promise<DeliveryOutcome> {
   const sender = deps.collective.get(message.senderId);
-  const botIdentity = sender?.identities?.find((i) => i.connector === 'teams-bot');
-  if (!botIdentity || deps.apps.ownerOf(botIdentity.externalId) !== message.senderId) {
+  const botOwner = sender?.identities?.some((i) => i.connector === 'teams-bot')
+    ? sender
+    : message.replyTo
+      ? deps.collective.get(message.replyTo)
+      : undefined;
+  const botIdentity = botOwner?.identities?.find((i) => i.connector === 'teams-bot');
+  if (!botIdentity || !botOwner || deps.apps.ownerOf(botIdentity.externalId) !== botOwner.id) {
     return {
       status: 'not-reachable',
       reason: `sender '${message.senderId}' has no live Teams bot`,
@@ -135,6 +148,16 @@ export async function deliverMessage(
       const reason = describeError(error);
       console.error('Teams message delivery failed', reason);
       return { status: 'failed', reason: `Teams message delivery failed: ${reason}` };
+    }
+  }
+
+  if (message.approvalRequests?.length) {
+    try {
+      await sendApprovalCards(message.approvalRequests, (activity) =>
+        app.send(record!.conversationId, activity),
+      );
+    } catch (error) {
+      console.error('Teams approval card delivery failed', describeError(error));
     }
   }
 
