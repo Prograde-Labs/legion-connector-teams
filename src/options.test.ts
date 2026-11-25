@@ -42,3 +42,33 @@ describe('resolveOptions outbound thread learning', () => {
       .toBe(false);
   });
 });
+
+describe('resolveOptions tools', () => {
+  it('enables all tools by default', () => {
+    const options = resolveOptions({ stateDir: '/tmp/x' });
+    expect([...options.tools].sort()).toEqual(['cards', 'list', 'reactions']);
+    expect(options.maxMessageRecords).toBe(2000);
+    expect(options.maxCardBytes).toBe(28000);
+  });
+
+  it('accepts a subset', () => {
+    expect([...resolveOptions({ stateDir: '/tmp/x', tools: ['cards'] }).tools]).toEqual(['cards']);
+  });
+
+  it('accepts false to disable every tool', () => {
+    expect(resolveOptions({ stateDir: '/tmp/x', tools: false }).tools.size).toBe(0);
+  });
+
+  it('rejects an unknown tool name', () => {
+    expect(() => resolveOptions({ stateDir: '/tmp/x', tools: ['nope' as never] })).toThrow(
+      /unknown Teams tool/,
+    );
+  });
+
+  it('rejects non-positive message and card limits', () => {
+    expect(() => resolveOptions({ stateDir: '/tmp/x', maxMessageRecords: 0 })).toThrow(
+      /maxMessageRecords/,
+    );
+    expect(() => resolveOptions({ stateDir: '/tmp/x', maxCardBytes: 0 })).toThrow(/maxCardBytes/);
+  });
+});

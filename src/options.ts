@@ -3,6 +3,8 @@ import type { DetailLevel } from '@legion-collective/types';
 export type TeamsTransport = 'http' | 'socket';
 export type UnknownUserPolicy = 'pairing' | 'reject' | 'auto-provision' | 'fallback';
 export type ToolDisplay = 'off' | 'status' | 'cards';
+export type TeamsToolName = 'cards' | 'reactions' | 'list';
+const TEAM_TOOL_NAMES: readonly TeamsToolName[] = ['cards', 'reactions', 'list'];
 
 export interface TeamsConnectorOptions {
   transport?: TeamsTransport;
@@ -26,6 +28,9 @@ export interface TeamsConnectorOptions {
   groupChats?: boolean;
   groupSenderPrefix?: string | null;
   learnOutboundThread?: boolean;
+  tools?: TeamsToolName[] | false;
+  maxMessageRecords?: number;
+  maxCardBytes?: number;
 }
 
 export interface ResolvedOptions {
@@ -50,6 +55,30 @@ export interface ResolvedOptions {
   groupChats: boolean;
   groupSenderPrefix: string | null;
   learnOutboundThread: boolean;
+  tools: Set<TeamsToolName>;
+  maxMessageRecords: number;
+  maxCardBytes: number;
+}
+
+function resolveTools(value: TeamsConnectorOptions['tools']): Set<TeamsToolName> {
+  if (value === false) return new Set();
+  if (value === undefined) return new Set(TEAM_TOOL_NAMES);
+  const tools = new Set<TeamsToolName>();
+  for (const name of value) {
+    if (!TEAM_TOOL_NAMES.includes(name)) {
+      throw new Error(`unknown Teams tool '${String(name)}' (expected cards, reactions, list)`);
+    }
+    tools.add(name);
+  }
+  return tools;
+}
+
+function positiveInteger(value: number | undefined, fallback: number, field: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${field} must be a positive integer`);
+  }
+  return value;
 }
 
 export function resolveOptions(options: TeamsConnectorOptions): ResolvedOptions {
@@ -82,5 +111,8 @@ export function resolveOptions(options: TeamsConnectorOptions): ResolvedOptions 
     groupChats: options.groupChats ?? true,
     groupSenderPrefix,
     learnOutboundThread: options.learnOutboundThread ?? true,
+    tools: resolveTools(options.tools),
+    maxMessageRecords: positiveInteger(options.maxMessageRecords, 2000, 'maxMessageRecords'),
+    maxCardBytes: positiveInteger(options.maxCardBytes, 28000, 'maxCardBytes'),
   };
 }
