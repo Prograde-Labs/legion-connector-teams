@@ -11,12 +11,12 @@ async function backups(dir: string): Promise<string[]> {
 }
 
 describe('StateStore', () => {
-  it('returns empty v2 state when the file is missing', async () => {
+  it('returns empty v3 state when the file is missing', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
     await expect(new StateStore(dir).load()).resolves.toEqual(emptyState());
   });
 
-  it('round-trips v2 state', async () => {
+  it('round-trips v3 state', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
     const store = new StateStore(dir);
     const state = emptyState();
@@ -34,6 +34,24 @@ describe('StateStore', () => {
       updatedAt: '2026-11-21T00:00:00.000Z',
     };
     state.legionConversationTargets['thread-1'] = 'app:group:19:g@thread.v2';
+    await store.save(state);
+    await expect(store.load()).resolves.toEqual(state);
+  });
+
+  it('round-trips v3 message records', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
+    const store = new StateStore(dir);
+    const state = emptyState();
+    state.messages['app:act-1'] = {
+      appId: 'app',
+      conversationId: 'conv-1',
+      activityId: 'act-1',
+      direction: 'inbound',
+      legionMessageId: 'msg-1',
+      createdAt: '2026-11-24T00:00:00.000Z',
+    };
+    state.legionMessages['msg-1'] = 'app:act-1';
+
     await store.save(state);
     await expect(store.load()).resolves.toEqual(state);
   });
@@ -83,7 +101,7 @@ describe('StateStore', () => {
       legionConversations: { 'app:alice': 'thread-1' },
     }));
     await expect(new StateStore(dir).load()).resolves.toEqual({
-      version: 2,
+      version: 3,
       conversations: {
         'app:alice': {
           conversationId: 'conv-1',
@@ -105,6 +123,8 @@ describe('StateStore', () => {
       },
       legionConversations: { 'app:alice': 'thread-1' },
       legionConversationTargets: {},
+      messages: {},
+      legionMessages: {},
     });
   });
 
@@ -135,7 +155,7 @@ describe('StateStore', () => {
       legionConversations: {},
     }));
     await expect(new StateStore(dir).load()).resolves.toEqual({
-      version: 2,
+      version: 3,
       conversations: {
         'app:alice': {
           conversationId: 'conv-1',
@@ -154,6 +174,8 @@ describe('StateStore', () => {
       },
       legionConversations: {},
       legionConversationTargets: {},
+      messages: {},
+      legionMessages: {},
     });
   });
 
@@ -166,6 +188,44 @@ describe('StateStore', () => {
       legionConversations: {},
     }));
     await expect(new StateStore(dir).load()).resolves.toEqual(emptyState());
+  });
+
+  it('migrates v2 state to v3 with empty message maps', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'teams-state-'));
+    await writeFile(
+      join(dir, 'state.json'),
+      JSON.stringify({
+        version: 2,
+        conversations: {
+          'app:alice': {
+            conversationId: 'conv-1',
+            conversationType: 'personal',
+            externalId: 'aad-1',
+            updatedAt: '2026-11-21T00:00:00.000Z',
+          },
+        },
+        pendingPairs: {},
+        legionConversations: { 'app:alice': 'thread-1' },
+        legionConversationTargets: { 'thread-1': 'app:alice' },
+      }),
+    );
+
+    await expect(new StateStore(dir).load()).resolves.toEqual({
+      version: 3,
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          externalId: 'aad-1',
+          updatedAt: '2026-11-21T00:00:00.000Z',
+        },
+      },
+      pendingPairs: {},
+      legionConversations: { 'app:alice': 'thread-1' },
+      legionConversationTargets: { 'thread-1': 'app:alice' },
+      messages: {},
+      legionMessages: {},
+    });
   });
 
   it('backs up corrupt state and starts fresh', async () => {
