@@ -83,7 +83,7 @@ describe('deliverMessage', () => {
       ],
       { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } },
     );
-    s.send.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('card down'));
+    s.send.mockResolvedValueOnce({ id: 'act-1' }).mockRejectedValueOnce(new Error('card down'));
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       await expect(
