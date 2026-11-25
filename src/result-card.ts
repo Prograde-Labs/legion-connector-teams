@@ -21,6 +21,8 @@ export interface ResultCardContext {
 const MAX_TEXT = 2000;
 const MAX_ITEMS = 10;
 const MAX_FACTS = 12;
+/** Display cap for the untrusted tool name interpolated into card headers. */
+const MAX_TOOL_NAME = 64;
 
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
@@ -31,13 +33,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function header(context: ResultCardContext): string {
-  if (context.status === 'success') return `✅ ${context.tool}`;
-  if (context.status === 'pending_approval') return `⏳ ${context.tool} requires approval`;
-  if (context.status === 'rejected') return `🚫 ${context.tool}`;
+  const tool = truncate(context.tool, MAX_TOOL_NAME);
+  if (context.status === 'success') return `✅ ${tool}`;
+  if (context.status === 'pending_approval') return `⏳ ${tool} requires approval`;
+  if (context.status === 'rejected') return `🚫 ${tool}`;
   if (context.status === 'error' && /requires_approval/.test(context.error ?? '')) {
-    return `⏳ ${context.tool} requires approval`;
+    return `⏳ ${tool} requires approval`;
   }
-  return `❌ ${context.tool}`;
+  return `❌ ${tool}`;
 }
 
 function scalarFacts(value: Record<string, unknown>): Array<{ title: string; value: string }> {
@@ -147,19 +150,54 @@ export function expandResultCard(
   }
 }
 
+function cardBytes(card: IAdaptiveCard): number {
+  return Buffer.byteLength(JSON.stringify(card), 'utf8');
+}
+
+/**
+ * Progressively simpler cards that fit `maxBytes`, richest first. The last
+ * candidate is the smallest serialization possible; callers that pass an
+ * absurdly small limit get that (it may still exceed a limit below 2 bytes).
+ */
+function compactResultCard(context: ResultCardContext, maxBytes: number): IAdaptiveCard {
+  const head = header(context);
+  const candidates: IAdaptiveCard[] = [
+    {
+      type: 'AdaptiveCard',
+      version: '1.4',
+      body: [
+        { type: 'TextBlock', text: head, weight: 'Bolder', wrap: true },
+        { type: 'TextBlock', text: 'Result too large to display.', wrap: true },
+      ],
+    } as IAdaptiveCard,
+    {
+      type: 'AdaptiveCard',
+      version: '1.4',
+      body: [{ type: 'TextBlock', text: head, weight: 'Bolder', wrap: true }],
+    } as IAdaptiveCard,
+  ];
+  for (let length = Math.min(head.length, 32); length >= 1; length = Math.floor(length / 2)) {
+    candidates.push({
+      type: 'AdaptiveCard',
+      version: '1.4',
+      body: [{ type: 'TextBlock', text: truncate(head, length), weight: 'Bolder', wrap: true }],
+    } as IAdaptiveCard);
+  }
+  candidates.push({ type: 'AdaptiveCard', version: '1.4', body: [] } as IAdaptiveCard);
+  candidates.push({ type: 'AdaptiveCard' } as IAdaptiveCard);
+  candidates.push({} as IAdaptiveCard);
+  for (const candidate of candidates) {
+    if (cardBytes(candidate) <= maxBytes) return candidate;
+  }
+  return candidates[candidates.length - 1];
+}
+
 export function buildResultCard(
   template: unknown,
   context: ResultCardContext,
   maxBytes: number,
 ): IAdaptiveCard {
   const card = expandResultCard(template, context) ?? genericResultCard(context);
-  if (Buffer.byteLength(JSON.stringify(card), 'utf8') <= maxBytes) return card;
-  return {
-    type: 'AdaptiveCard',
-    version: '1.4',
-    body: [
-      { type: 'TextBlock', text: header(context), weight: 'Bolder', wrap: true },
-      { type: 'TextBlock', text: 'Result too large to display.', wrap: true },
-    ],
-  } as IAdaptiveCard;
+  if (cardBytes(card) <= maxBytes) return card;
+  return compactResultCard(context, maxBytes);
 }

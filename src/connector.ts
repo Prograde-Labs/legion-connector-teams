@@ -34,6 +34,16 @@ function cardResponse(card: IAdaptiveCard): CardInvokeResponse {
   };
 }
 
+/** Let the invoke response (running-card ack) land before replacing the card. */
+const ACK_SETTLE_MS = 300;
+
+/** Longest tool name accepted from an untrusted card action payload. */
+const MAX_TOOL_NAME = 128;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class TeamsConnector implements Connector {
   readonly name = 'teams';
   private ctx?: ConnectorContext;
@@ -250,6 +260,7 @@ export class TeamsConnector implements Connector {
     };
     const tool = typeof data.tool === 'string' ? data.tool.trim() : '';
     if (!tool) return messageResponse('Missing tool.');
+    if (tool.length > MAX_TOOL_NAME) return messageResponse('Invalid tool.');
     if (
       data.args !== undefined &&
       (typeof data.args !== 'object' || data.args === null || Array.isArray(data.args))
@@ -311,8 +322,17 @@ export class TeamsConnector implements Connector {
         );
 
         const activity = new MessageActivityInput().addCard('adaptive', card);
+        // Teams applies the ack card after the invoke response returns; updating
+        // immediately can race ahead of it, leaving the card stuck on "Running…".
+        await delay(ACK_SETTLE_MS);
         if (cardActivityId) {
-          await app.api.conversations.updateActivity(teamsConversationId, cardActivityId, activity);
+          try {
+            await app.api.conversations.updateActivity(teamsConversationId, cardActivityId, activity);
+          } catch (error) {
+            // Surface the result as a follow-up when the in-place update fails.
+            console.error('Teams card update failed', describeError(error));
+            await app.send(teamsConversationId, activity);
+          }
         } else {
           await app.send(teamsConversationId, activity);
         }

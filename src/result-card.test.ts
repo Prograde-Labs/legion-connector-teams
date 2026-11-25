@@ -124,7 +124,20 @@ describe('buildResultCard', () => {
   });
 
   it('falls back to a compact card when over the byte limit', () => {
-    const card = buildResultCard(undefined, base, 10);
+    const card = buildResultCard(undefined, { ...base, data: { text: 'x'.repeat(5000) } }, 300);
     expect(JSON.stringify(card)).toContain('Result too large to display.');
+  });
+
+  it('guarantees the compact card fits a tiny byte limit', () => {
+    const card = buildResultCard(undefined, base, 10);
+    expect(Buffer.byteLength(JSON.stringify(card), 'utf8')).toBeLessThanOrEqual(10);
+  });
+
+  it('truncates an over-long tool name in the header', () => {
+    const tool = 't'.repeat(200);
+    const card = genericResultCard({ ...base, tool });
+    const text = JSON.stringify(card);
+    expect(text).toContain(`✅ ${'t'.repeat(63)}…`);
+    expect(text).not.toContain(tool);
   });
 });

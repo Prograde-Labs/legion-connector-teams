@@ -378,6 +378,31 @@ describe('TeamsConnector', () => {
       }
     });
 
+    it('rejects an over-long tool name without calling the tool', async () => {
+      const { app, deps } = setup();
+      const factory = vi.fn<TeamsAppFactory>(() => app);
+      const dir = await mkdtemp(join(tmpdir(), 'teams-tool-long-'));
+      const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+      const callTool = vi.fn(async () => ({ result: { status: 'success' }, conversationId: 'c' }));
+      await connector.start({ callTool } as never);
+      try {
+        const [entry, handlers] = factory.mock.calls[0];
+        const response = await handlers.onToolAction(entry, {
+          send: vi.fn(),
+          activity: {
+            from: { aadObjectId: 'aad-1' },
+            channelData: { tenant: { id: 't' } },
+            conversation: { conversationType: 'personal', id: 'conv-1' },
+            value: { action: { data: { action: 'tool', tool: 't'.repeat(129) } } },
+          },
+        } as never);
+        expect(response).toHaveProperty('body.value', 'Invalid tool.');
+        expect(callTool).not.toHaveBeenCalled();
+      } finally {
+        await connector.stop();
+      }
+    });
+
     it('rejects tenant and conversation-type mismatches', async () => {
       const { app, deps } = setup();
       const factory = vi.fn<TeamsAppFactory>(() => app);

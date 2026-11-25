@@ -140,4 +140,11 @@ describe('runningCard', () => {
     expect(JSON.stringify(card)).toContain('Running teams__post_reaction');
     expect(card.actions ?? []).toHaveLength(0);
   });
+
+  it('truncates an over-long tool name', () => {
+    const tool = 't'.repeat(200);
+    const text = JSON.stringify(runningCard(tool));
+    expect(text).toContain(`Running ${'t'.repeat(63)}…`);
+    expect(text).not.toContain(tool);
+  });
 });

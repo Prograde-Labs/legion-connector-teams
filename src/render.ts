@@ -24,6 +24,9 @@ function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
+/** Display cap for untrusted tool names interpolated into card headers. */
+const MAX_TOOL_NAME = 64;
+
 function serializeArgs(args: unknown): string {
   try {
     return JSON.stringify(args) ?? '<unserializable args>';
@@ -166,7 +169,7 @@ export function runningCard(tool: string): IAdaptiveCard {
   return {
     type: 'AdaptiveCard',
     version: '1.4',
-    body: [{ type: 'TextBlock', text: `⏳ Running ${tool}…`, weight: 'Bolder', wrap: true }],
+    body: [{ type: 'TextBlock', text: `⏳ Running ${truncate(tool, MAX_TOOL_NAME)}…`, weight: 'Bolder', wrap: true }],
   } as IAdaptiveCard;
 }
 
