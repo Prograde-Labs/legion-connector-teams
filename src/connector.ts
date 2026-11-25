@@ -1,5 +1,6 @@
 // src/connector.ts
 import type {
+  AnyTool,
   Connector,
   ConnectorContext,
   ConnectorRuntimeDeps,
@@ -16,6 +17,7 @@ import { decidedApprovalCard, type ApprovalRequest } from './render.js';
 import { resolveOptions, type ResolvedOptions, type TeamsConnectorOptions } from './options.js';
 import { SerialQueue } from './serialize.js';
 import { StateStore, type TeamsState } from './state.js';
+import { buildTeamsTools } from './tools.js';
 
 function approvalResponse(value: string): CardInvokeResponse {
   return { status: 200, body: { statusCode: 200, type: 'application/vnd.microsoft.activity.message', value } };
@@ -241,6 +243,17 @@ export class TeamsConnector implements Connector {
       },
       message,
     );
+  }
+
+  tools(): AnyTool[] {
+    if (!this.pool || !this.state || !this.store) return [];
+    return buildTeamsTools({
+      collective: this.deps.collective,
+      pool: this.pool,
+      state: this.state,
+      store: this.store,
+      options: this.options,
+    });
   }
 
   async stop(): Promise<void> {

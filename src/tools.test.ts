@@ -4,7 +4,7 @@ import type { BotPool, TeamsAppLike } from './bot-pool.js';
 import type { CollectiveLike } from './directory.js';
 import { resolveOptions } from './options.js';
 import { emptyState, type StateStore, type TeamsState } from './state.js';
-import { sendCardTool, postReactionTool, listConversationsTool } from './tools.js';
+import { buildTeamsTools, sendCardTool, postReactionTool, listConversationsTool } from './tools.js';
 import { recordMessage } from './tool-state.js';
 
 function setup(
@@ -381,5 +381,26 @@ describe('teams__list_conversations', () => {
     });
     expect(result.status).toBe('error');
     expect(result.error).toContain('conversationType');
+  });
+});
+
+describe('buildTeamsTools selection', () => {
+  it('returns all three tools by default', () => {
+    const s = setup();
+    expect(buildTeamsTools(s.deps).map((tool) => tool.name)).toEqual([
+      'teams__send_card',
+      'teams__post_reaction',
+      'teams__list_conversations',
+    ]);
+  });
+
+  it('returns only the enabled tools', () => {
+    const s = setup({ options: { tools: ['reactions'] } });
+    expect(buildTeamsTools(s.deps).map((tool) => tool.name)).toEqual(['teams__post_reaction']);
+  });
+
+  it('returns no tools when disabled', () => {
+    const s = setup({ options: { tools: false } });
+    expect(buildTeamsTools(s.deps)).toEqual([]);
   });
 });
