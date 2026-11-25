@@ -4,7 +4,8 @@ import type { BotPool, TeamsAppLike } from './bot-pool.js';
 import type { CollectiveLike } from './directory.js';
 import { resolveOptions } from './options.js';
 import { emptyState, type StateStore, type TeamsState } from './state.js';
-import { sendCardTool } from './tools.js';
+import { sendCardTool, postReactionTool } from './tools.js';
+import { recordMessage } from './tool-state.js';
 
 function setup(
   args: {
@@ -167,5 +168,153 @@ describe('teams__send_card', () => {
     });
     expect(result.status).toBe('error');
     expect(result.error).toContain('exactly one');
+  });
+});
+
+describe('teams__post_reaction', () => {
+  it('adds a reaction by Legion message id', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    recordMessage(
+      s.deps.state,
+      {
+        appId: 'app',
+        conversationId: 'conv-1',
+        activityId: 'act-msg',
+        direction: 'inbound',
+        legionMessageId: 'msg-1',
+      },
+      10,
+    );
+
+    const result = await run(postReactionTool(s.deps), s.context, {
+      messageId: 'msg-1',
+      reaction: 'like',
+    });
+
+    expect(result.status).toBe('success');
+    expect(s.reactions.add).toHaveBeenCalledWith('conv-1', 'act-msg', 'like');
+  });
+
+  it('removes a reaction when remove is true', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    recordMessage(
+      s.deps.state,
+      {
+        appId: 'app',
+        conversationId: 'conv-1',
+        activityId: 'act-msg',
+        direction: 'inbound',
+        legionMessageId: 'msg-1',
+      },
+      10,
+    );
+
+    const result = await run(postReactionTool(s.deps), s.context, {
+      messageId: 'msg-1',
+      reaction: 'heart',
+      remove: true,
+    });
+
+    expect(result.status).toBe('success');
+    expect(s.reactions.delete).toHaveBeenCalledWith('conv-1', 'act-msg', 'heart');
+  });
+
+  it('accepts a raw activity id with a conversation', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+
+    const result = await run(postReactionTool(s.deps), s.context, {
+      messageId: 'act-raw',
+      reaction: 'launch',
+      conversationId: 'conv-1',
+    });
+
+    expect(result.status).toBe('success');
+    expect(s.reactions.add).toHaveBeenCalledWith('conv-1', 'act-raw', 'launch');
+  });
+
+  it('rejects an unknown message', async () => {
+    const s = setup();
+    const result = await run(postReactionTool(s.deps), s.context, {
+      messageId: 'nope',
+      reaction: 'like',
+    });
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('not found');
+  });
+
+  it('rejects a message recorded for another bot', async () => {
+    const s = setup();
+    recordMessage(
+      s.deps.state,
+      {
+        appId: 'other',
+        conversationId: 'conv-1',
+        activityId: 'act-msg',
+        direction: 'inbound',
+        legionMessageId: 'msg-1',
+      },
+      10,
+    );
+    const result = await run(postReactionTool(s.deps), s.context, {
+      messageId: 'msg-1',
+      reaction: 'like',
+    });
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('another bot');
+  });
+
+  it('reports SDK reaction failures as tool errors', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    recordMessage(
+      s.deps.state,
+      {
+        appId: 'app',
+        conversationId: 'conv-1',
+        activityId: 'act-msg',
+        direction: 'inbound',
+        legionMessageId: 'msg-1',
+      },
+      10,
+    );
+    s.reactions.add.mockRejectedValue(new Error('reaction failed'));
+
+    const result = await run(postReactionTool(s.deps), s.context, {
+      messageId: 'msg-1',
+      reaction: 'like',
+    });
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('reaction failed');
   });
 });

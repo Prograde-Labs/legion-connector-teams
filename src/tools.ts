@@ -2,7 +2,12 @@ import type { AnyTool, Tool, ToolContext, ToolResult } from '@legion-collective/
 import type { IAdaptiveCard } from '@microsoft/teams.cards';
 import { MessageActivityInput } from '@microsoft/teams.api';
 import { describeError } from './errors.js';
-import { resolveCallerBot, resolveConversationTarget, type TeamsToolDeps } from './tool-targets.js';
+import {
+  resolveCallerBot,
+  resolveConversationTarget,
+  resolveMessageTarget,
+  type TeamsToolDeps,
+} from './tool-targets.js';
 import { recordMessage } from './tool-state.js';
 
 const ok = (data: unknown): ToolResult => ({ status: 'success', data });
@@ -119,8 +124,87 @@ export function sendCardTool(deps: TeamsToolDeps): Tool {
   };
 }
 
+export function postReactionTool(deps: TeamsToolDeps): Tool {
+  return {
+    name: 'teams__post_reaction',
+    description:
+      "Add or remove an emoji reaction on a Teams message through the caller's Teams bot.",
+    parameters: {
+      type: 'object',
+      properties: {
+        messageId: {
+          type: 'string',
+          description: 'Legion message id or Teams activity id',
+        },
+        reaction: {
+          type: 'string',
+          description: 'Emoji reaction type, e.g. like, heart, 1f440_eyes, launch',
+        },
+        conversationId: {
+          type: 'string',
+          description:
+            'Teams conversation id; required when messageId is a raw activity id that is not recorded',
+        },
+        remove: {
+          type: 'boolean',
+          description: 'Remove instead of add',
+        },
+      },
+      required: ['messageId', 'reaction'],
+    },
+    async execute(args: unknown, context: ToolContext): Promise<ToolResult> {
+      const raw = (args ?? {}) as Record<string, unknown>;
+      const messageId = typeof raw.messageId === 'string' ? raw.messageId.trim() : '';
+      const reaction = typeof raw.reaction === 'string' ? raw.reaction.trim() : '';
+      if (!messageId) return fail('teams__post_reaction: messageId is required');
+      if (!reaction) return fail('teams__post_reaction: reaction is required');
+
+      const conversationId =
+        typeof raw.conversationId === 'string' && raw.conversationId.trim()
+          ? raw.conversationId.trim()
+          : undefined;
+
+      const caller = resolveCallerBot(deps, context.participant.id);
+      if (!caller.ok) return fail(caller.error);
+
+      const target = resolveMessageTarget(deps, caller.value.appId, {
+        messageId,
+        conversationId,
+      });
+      if (!target.ok) return fail(target.error);
+
+      const remove = raw.remove === true;
+      try {
+        if (remove) {
+          await caller.value.app.api.reactions.delete(
+            target.value.conversationId,
+            target.value.activityId,
+            reaction,
+          );
+        } else {
+          await caller.value.app.api.reactions.add(
+            target.value.conversationId,
+            target.value.activityId,
+            reaction,
+          );
+        }
+      } catch (error) {
+        return fail(`teams__post_reaction: ${describeError(error)}`);
+      }
+
+      return ok({
+        conversationId: target.value.conversationId,
+        activityId: target.value.activityId,
+        reaction,
+        removed: remove,
+      });
+    },
+  };
+}
+
 export function buildTeamsTools(deps: TeamsToolDeps): AnyTool[] {
   const tools: AnyTool[] = [];
   if (deps.options.tools.has('cards')) tools.push(sendCardTool(deps));
+  if (deps.options.tools.has('reactions')) tools.push(postReactionTool(deps));
   return tools;
 }
