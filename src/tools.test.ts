@@ -4,7 +4,7 @@ import type { BotPool, TeamsAppLike } from './bot-pool.js';
 import type { CollectiveLike } from './directory.js';
 import { resolveOptions } from './options.js';
 import { emptyState, type StateStore, type TeamsState } from './state.js';
-import { sendCardTool, postReactionTool } from './tools.js';
+import { sendCardTool, postReactionTool, listConversationsTool } from './tools.js';
 import { recordMessage } from './tool-state.js';
 
 function setup(
@@ -316,5 +316,70 @@ describe('teams__post_reaction', () => {
     });
     expect(result.status).toBe('error');
     expect(result.error).toContain('reaction failed');
+  });
+});
+
+describe('teams__list_conversations', () => {
+  const conversations: TeamsState['conversations'] = {
+    'app:alice': {
+      conversationId: 'conv-1',
+      conversationType: 'personal',
+      externalId: 'aad-1',
+      displayName: 'Alice',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    },
+    'app:team-eng': {
+      conversationId: '19:g@thread.v2',
+      conversationType: 'groupChat',
+      externalId: '19:g@thread.v2',
+      name: 'Engineering',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    },
+    'other:alice': {
+      conversationId: 'conv-3',
+      conversationType: 'personal',
+      updatedAt: '2026-01-03T00:00:00.000Z',
+    },
+  };
+
+  it("lists only the caller bot's conversations, newest first", async () => {
+    const s = setup({ conversations });
+    const result = await run(listConversationsTool(s.deps), s.context, {});
+    expect(result.status).toBe('success');
+    const listed = (result.data as { conversations: Array<{ key: string }> }).conversations;
+    expect(listed.map((entry) => entry.key)).toEqual(['app:alice', 'app:team-eng']);
+  });
+
+  it('filters by conversation type', async () => {
+    const s = setup({ conversations });
+    const result = await run(listConversationsTool(s.deps), s.context, {
+      conversationType: 'groupChat',
+    });
+    const listed = (result.data as { conversations: Array<{ key: string }> }).conversations;
+    expect(listed.map((entry) => entry.key)).toEqual(['app:team-eng']);
+  });
+
+  it('caps the limit at 200 and applies a smaller limit', async () => {
+    const s = setup({ conversations });
+    const limited = await run(listConversationsTool(s.deps), s.context, { limit: 1 });
+    expect((limited.data as { conversations: unknown[] }).conversations).toHaveLength(1);
+
+    const capped = await run(listConversationsTool(s.deps), s.context, { limit: 500 });
+    expect((capped.data as { conversations: unknown[] }).conversations).toHaveLength(2);
+  });
+
+  it('returns an empty list when the bot has no conversations', async () => {
+    const s = setup();
+    const result = await run(listConversationsTool(s.deps), s.context, {});
+    expect(result.data).toEqual({ conversations: [] });
+  });
+
+  it('rejects an invalid conversation type', async () => {
+    const s = setup();
+    const result = await run(listConversationsTool(s.deps), s.context, {
+      conversationType: 'channel',
+    });
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('conversationType');
   });
 });

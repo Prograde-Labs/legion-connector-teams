@@ -202,9 +202,65 @@ export function postReactionTool(deps: TeamsToolDeps): Tool {
   };
 }
 
+export function listConversationsTool(deps: TeamsToolDeps): Tool {
+  return {
+    name: 'teams__list_conversations',
+    description: "List Teams conversations known to the caller's Teams bot.",
+    parameters: {
+      type: 'object',
+      properties: {
+        conversationType: {
+          type: 'string',
+          enum: ['personal', 'groupChat'],
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 200,
+        },
+      },
+    },
+    async execute(args: unknown, context: ToolContext): Promise<ToolResult> {
+      const raw = (args ?? {}) as Record<string, unknown>;
+      const type = raw.conversationType;
+      if (type !== undefined && type !== 'personal' && type !== 'groupChat') {
+        return fail(`teams__list_conversations: invalid conversationType '${String(type)}'`);
+      }
+      const limit =
+        typeof raw.limit === 'number' && Number.isInteger(raw.limit)
+          ? Math.min(200, Math.max(1, raw.limit))
+          : 50;
+
+      const caller = resolveCallerBot(deps, context.participant.id);
+      if (!caller.ok) return fail(caller.error);
+
+      const prefix = `${caller.value.appId}:`;
+      const conversations = Object.entries(deps.state.conversations)
+        .filter(
+          ([key, record]) =>
+            key.startsWith(prefix) && (type === undefined || record.conversationType === type),
+        )
+        .sort(([, left], [, right]) => right.updatedAt.localeCompare(left.updatedAt))
+        .slice(0, limit)
+        .map(([key, record]) => ({
+          key,
+          conversationId: record.conversationId,
+          conversationType: record.conversationType,
+          ...(record.externalId === undefined ? {} : { externalId: record.externalId }),
+          ...(record.name === undefined ? {} : { name: record.name }),
+          ...(record.displayName === undefined ? {} : { displayName: record.displayName }),
+          updatedAt: record.updatedAt,
+        }));
+
+      return ok({ conversations });
+    },
+  };
+}
+
 export function buildTeamsTools(deps: TeamsToolDeps): AnyTool[] {
   const tools: AnyTool[] = [];
   if (deps.options.tools.has('cards')) tools.push(sendCardTool(deps));
   if (deps.options.tools.has('reactions')) tools.push(postReactionTool(deps));
+  if (deps.options.tools.has('list')) tools.push(listConversationsTool(deps));
   return tools;
 }
