@@ -142,6 +142,34 @@ export function toolCard(name: string, args: string): IAdaptiveCard {
   } as IAdaptiveCard;
 }
 
+export interface ToolButtonSpec {
+  title: string;
+  tool: string;
+  args?: unknown;
+  resultCard?: unknown;
+}
+
+export function toolButtonActions(buttons: ToolButtonSpec[]): unknown[] {
+  return buttons.map((button) => ({
+    type: 'Action.Execute',
+    title: button.title,
+    data: {
+      action: 'tool',
+      tool: button.tool,
+      ...(button.args === undefined ? {} : { args: button.args }),
+      ...(button.resultCard === undefined ? {} : { resultCard: button.resultCard }),
+    },
+  }));
+}
+
+export function runningCard(tool: string): IAdaptiveCard {
+  return {
+    type: 'AdaptiveCard',
+    version: '1.4',
+    body: [{ type: 'TextBlock', text: `⏳ Running ${tool}…`, weight: 'Bolder', wrap: true }],
+  } as IAdaptiveCard;
+}
+
 export function formatToolResult(result: {
   status: string;
   error?: string;
