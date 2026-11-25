@@ -24,6 +24,9 @@ function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
+/** Display cap for untrusted tool names interpolated into card headers. */
+const MAX_TOOL_NAME = 64;
+
 function serializeArgs(args: unknown): string {
   try {
     return JSON.stringify(args) ?? '<unserializable args>';
@@ -139,6 +142,34 @@ export function toolCard(name: string, args: string): IAdaptiveCard {
       { type: 'TextBlock', text: `🛠️ ${name}`, weight: 'Bolder', wrap: true },
       { type: 'TextBlock', text: args || '(no args)', fontType: 'Monospace', wrap: true },
     ],
+  } as IAdaptiveCard;
+}
+
+export interface ToolButtonSpec {
+  title: string;
+  tool: string;
+  args?: unknown;
+  resultCard?: unknown;
+}
+
+export function toolButtonActions(buttons: ToolButtonSpec[]): unknown[] {
+  return buttons.map((button) => ({
+    type: 'Action.Execute',
+    title: button.title,
+    data: {
+      action: 'tool',
+      tool: button.tool,
+      ...(button.args === undefined ? {} : { args: button.args }),
+      ...(button.resultCard === undefined ? {} : { resultCard: button.resultCard }),
+    },
+  }));
+}
+
+export function runningCard(tool: string): IAdaptiveCard {
+  return {
+    type: 'AdaptiveCard',
+    version: '1.4',
+    body: [{ type: 'TextBlock', text: `⏳ Running ${truncate(tool, MAX_TOOL_NAME)}…`, weight: 'Bolder', wrap: true }],
   } as IAdaptiveCard;
 }
 

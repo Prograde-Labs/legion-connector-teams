@@ -29,6 +29,7 @@ export interface TeamsActivity {
   conversation?: { id?: string; name?: string; conversationType?: string };
   channelData?: { tenant?: { id?: string } };
   serviceUrl?: string;
+  replyToId?: string;
   text?: string;
   entities?: Array<{
     type?: string;

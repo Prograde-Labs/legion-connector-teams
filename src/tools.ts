@@ -8,10 +8,63 @@ import {
   resolveMessageTarget,
   type TeamsToolDeps,
 } from './tool-targets.js';
+import { toolButtonActions, type ToolButtonSpec } from './render.js';
 import { recordMessage } from './tool-state.js';
 
 const ok = (data: unknown): ToolResult => ({ status: 'success', data });
 const fail = (error: string): ToolResult => ({ status: 'error', error });
+
+const MAX_CARD_ACTIONS = 6;
+const MAX_BUTTON_TITLE = 40;
+
+function validateButtons(
+  value: unknown,
+): { ok: true; buttons: ToolButtonSpec[] } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, buttons: [] };
+  if (!Array.isArray(value)) return { ok: false, error: 'buttons must be an array' };
+  if (value.length === 0) return { ok: true, buttons: [] };
+  if (value.length > MAX_CARD_ACTIONS) {
+    return { ok: false, error: `buttons must contain at most ${MAX_CARD_ACTIONS} entries` };
+  }
+  const buttons: ToolButtonSpec[] = [];
+  for (const [index, raw] of value.entries()) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      return { ok: false, error: `buttons[${index}] must be an object` };
+    }
+    const entry = raw as Record<string, unknown>;
+    const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+    if (!title) return { ok: false, error: `buttons[${index}].title is required` };
+    if (title.length > MAX_BUTTON_TITLE) {
+      return {
+        ok: false,
+        error: `buttons[${index}].title must be at most ${MAX_BUTTON_TITLE} characters`,
+      };
+    }
+    const tool = typeof entry.tool === 'string' ? entry.tool.trim() : '';
+    if (!tool) return { ok: false, error: `buttons[${index}].tool is required` };
+    if (
+      entry.args !== undefined &&
+      (typeof entry.args !== 'object' || entry.args === null || Array.isArray(entry.args))
+    ) {
+      return { ok: false, error: `buttons[${index}].args must be an object` };
+    }
+    if (
+      entry.resultCard !== undefined &&
+      (typeof entry.resultCard !== 'object' ||
+        entry.resultCard === null ||
+        Array.isArray(entry.resultCard))
+    ) {
+      return { ok: false, error: `buttons[${index}].resultCard must be an object` };
+    }
+    buttons.push({
+      title,
+      tool,
+      ...(entry.args === undefined ? {} : { args: entry.args }),
+      ...(entry.resultCard === undefined ? {} : { resultCard: entry.resultCard }),
+    });
+  }
+  return { ok: true, buttons };
+}
 
 async function saveQuietly(deps: TeamsToolDeps): Promise<void> {
   try {
@@ -24,7 +77,9 @@ async function saveQuietly(deps: TeamsToolDeps): Promise<void> {
 export function sendCardTool(deps: TeamsToolDeps): Tool {
   return {
     name: 'teams__send_card',
-    description: "Send an Adaptive Card to a Teams conversation through the caller's Teams bot.",
+    description:
+      "Send an Adaptive Card to a Teams conversation through the caller's Teams bot. " +
+      'Optional buttons run granted tools as the clicking user.',
     parameters: {
       type: 'object',
       properties: {
@@ -39,6 +94,20 @@ export function sendCardTool(deps: TeamsToolDeps): Tool {
         card: {
           type: 'object',
           description: 'Adaptive Card JSON (schema version 1.4 or later)',
+        },
+        buttons: {
+          type: 'array',
+          description: 'Optional tool buttons. Each runs a granted tool as the clicking user.',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              tool: { type: 'string' },
+              args: { type: 'object' },
+              resultCard: { type: 'object' },
+            },
+            required: ['title', 'tool'],
+          },
         },
         fallbackText: {
           type: 'string',
@@ -79,7 +148,23 @@ export function sendCardTool(deps: TeamsToolDeps): Tool {
       });
       if (!target.ok) return fail(target.error);
 
-      const serialized = JSON.stringify(card);
+      const checked = validateButtons(raw.buttons);
+      if (!checked.ok) return fail(`teams__send_card: ${checked.error}`);
+
+      const existingActions = Array.isArray((card as { actions?: unknown[] }).actions)
+        ? (card as { actions: unknown[] }).actions
+        : [];
+      const actions = [...existingActions, ...toolButtonActions(checked.buttons)];
+      if (checked.buttons.length > 0 && actions.length > MAX_CARD_ACTIONS) {
+        return fail(
+          `teams__send_card: card has ${actions.length} actions (at most ${MAX_CARD_ACTIONS} actions)`,
+        );
+      }
+      const outgoingCard = actions.length
+        ? { ...(card as Record<string, unknown>), actions }
+        : card;
+
+      const serialized = JSON.stringify(outgoingCard);
       const bytes = Buffer.byteLength(serialized, 'utf8');
       if (bytes > deps.options.maxCardBytes) {
         return fail(`teams__send_card: card is ${bytes} bytes (max ${deps.options.maxCardBytes})`);
@@ -89,7 +174,7 @@ export function sendCardTool(deps: TeamsToolDeps): Tool {
         typeof raw.fallbackText === 'string' && raw.fallbackText.trim()
           ? new MessageActivityInput('', { summary: raw.fallbackText })
           : new MessageActivityInput();
-      activity.addCard('adaptive', card as IAdaptiveCard);
+      activity.addCard('adaptive', outgoingCard as IAdaptiveCard);
 
       const aiLabel = typeof raw.aiLabel === 'boolean' ? raw.aiLabel : deps.options.aiLabel;
       if (aiLabel) activity.addAiGenerated();

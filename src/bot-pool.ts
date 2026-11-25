@@ -16,7 +16,10 @@ export interface TeamsAppLike {
   stop(): Promise<void>;
   send(conversationId: string, activity: unknown): Promise<{ id?: string }>;
   api: {
-    conversations: { create(params: Record<string, unknown>): Promise<{ id: string }> };
+    conversations: {
+      create(params: Record<string, unknown>): Promise<{ id: string }>;
+      updateActivity(conversationId: string, id: string, params: unknown): Promise<unknown>;
+    };
     reactions: {
       add(conversationId: string, activityId: string, type: string): Promise<void>;
       delete(conversationId: string, activityId: string, type: string): Promise<void>;
@@ -30,6 +33,7 @@ export interface AppHandlers {
   onInstall: (entry: BotEntry, ctx: never) => Promise<void>;
   onConversationUpdate: (entry: BotEntry, ctx: never) => Promise<void>;
   onApproval: (entry: BotEntry, ctx: never, decision: 'approve' | 'reject') => Promise<CardInvokeResponse>;
+  onToolAction: (entry: BotEntry, ctx: never) => Promise<CardInvokeResponse>;
 }
 
 export interface CardInvokeResponse {
@@ -113,6 +117,7 @@ export function defaultAppFactory(
   app.on('conversationUpdate', (ctx) => handlers.onConversationUpdate(entry, ctx as never));
   app.on('card.action.approve', (ctx) => handlers.onApproval(entry, ctx as never, 'approve'));
   app.on('card.action.reject', (ctx) => handlers.onApproval(entry, ctx as never, 'reject'));
+  app.on('card.action.tool', (ctx) => handlers.onToolAction(entry, ctx as never));
 
   return app as unknown as TeamsAppLike;
 }

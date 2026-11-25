@@ -105,7 +105,7 @@ The connector contributes three Teams tools (controlled by the `tools` option):
 
 | Tool | Parameters | Purpose |
 | --- | --- | --- |
-| `teams__send_card` | `card` (required Adaptive Card object, schema 1.4+), exactly one of `participantId` or `conversationId`, optional `fallbackText`, optional `aiLabel` | Send an Adaptive Card. Cards larger than `maxCardBytes` are rejected. Returns the conversation and activity IDs. |
+| `teams__send_card` | `card` (required Adaptive Card object, schema 1.4+), exactly one of `participantId` or `conversationId`, optional `fallbackText`, optional `aiLabel`, optional `buttons` | Send an Adaptive Card. Cards larger than `maxCardBytes` are rejected. Buttons run granted tools as the clicking user. Returns the conversation and activity IDs. |
 | `teams__post_reaction` | `messageId` (required), `reaction` (required, e.g. `like`, `heart`, `1f440_eyes`, `launch`), optional `conversationId`, optional `remove` | Add or, with `remove: true`, remove an emoji reaction on a message. |
 | `teams__list_conversations` | optional `conversationType` (`personal` or `groupChat`), optional `limit` (1–200, default 50) | List the Teams conversations known to the caller's bot, most recently updated first. |
 
@@ -124,6 +124,63 @@ The connector contributes three Teams tools (controlled by the `tools` option):
 **Authorization guidance.** Set `teams__send_card` to `requires_approval` for agents that post to humans. `teams__post_reaction` may be `auto` or `requires_approval`, depending on the deployment. `teams__list_conversations` is read-only.
 
 **Acting bot.** Each tool acts through the caller's own live `teams-bot`, so the caller must own a `teams-bot` identity. A caller cannot use another participant's bot.
+
+### Tool buttons
+
+`teams__send_card` accepts an optional `buttons` array (max 6 entries):
+
+```json
+{
+  "participantId": "teams-chris-...",
+  "card": { "type": "AdaptiveCard", "version": "1.4", "body": [] },
+  "buttons": [
+    {
+      "title": "Add 👍",
+      "tool": "teams__post_reaction",
+      "args": { "messageId": "m-1", "reaction": "like" }
+    }
+  ]
+}
+```
+
+Each button becomes an `Action.Execute` with `data.action = "tool"`. Clicking it:
+
+1. Resolves the Teams user to a Legion participant. Unknown or retired users get
+   `Not registered.`; no auto-provisioning happens on click.
+2. Runs `tool` as that participant through `ConnectorContext.callTool`. The clicker's
+   `tools` grants, argument scopes, and tool visibility are enforced. There are no
+   automatic grants.
+3. Acknowledges with a “Running <tool>…” card, then updates the card in place with the
+   result. If Teams omits the card message id, the result is sent as a follow-up message.
+
+`args` is fixed at send time. The card payload is untrusted and validated before use.
+
+**Result formatting.** A button may include a `resultCard` Adaptive Card template:
+
+```json
+{
+  "title": "List chats",
+  "tool": "teams__list_conversations",
+  "resultCard": {
+    "type": "AdaptiveCard",
+    "version": "1.4",
+    "body": [
+      { "type": "TextBlock", "text": "Status: ${status}" },
+      { "type": "TextBlock", "text": "Count: ${count(data.conversations)}" }
+    ]
+  }
+}
+```
+
+The template is expanded with `adaptivecards-templating` against
+`{status, data, error, message, tool, args, clicker}`, where `clicker` is
+`{id, name?}`. `${...}` and `$data` work. If the template is missing or invalid, the
+connector uses a generic renderer (facts, arrays, or monospace JSON) and falls back to a
+compact card when the result exceeds `maxCardBytes`.
+
+**Approval-gated tools.** V1 does not create approval requests from a button click. If the
+clicker's policy is `requires_approval`, the card says the tool requires approval. The
+approval flow for button tools is a follow-up.
 
 **Targeting.**
 

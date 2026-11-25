@@ -20,7 +20,10 @@ function fakeApp(): TeamsAppLike & { sent: unknown[]; stopped: number; initializ
       return { id: 'act-1' };
     },
     api: {
-      conversations: { create: async () => ({ id: 'conv' }) },
+      conversations: {
+        create: async () => ({ id: 'conv' }),
+        updateActivity: async () => undefined,
+      },
       reactions: { add: async () => undefined, delete: async () => undefined },
     },
     on() {},
@@ -54,6 +57,9 @@ const handlers: AppHandlers = {
   onApproval: async () => ({ status: 200, body: {
     statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'Approval recorded.',
   } }),
+  onToolAction: async () => ({ status: 200, body: {
+    statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'Tool recorded.',
+  } }),
 };
 
 describe('BotPool', () => {
@@ -73,6 +79,32 @@ describe('BotPool', () => {
         expect(onApproval).toHaveBeenLastCalledWith(entry, context, decision);
       }
     } finally { on.mockRestore(); }
+  });
+  it('returns the invoke response from the SDK tool action callback', async () => {
+    const on = vi.spyOn(App.prototype, 'on');
+    const entry = bot('assistant', 'app');
+    const onToolAction = vi.fn(handlers.onToolAction);
+    try {
+      defaultAppFactory(
+        entry,
+        { ...handlers, onToolAction },
+        { kind: 'http', expressApp: express() },
+      );
+      const callback = on.mock.calls.find(([name]) => name === 'card.action.tool')?.[1];
+      expect(callback).toBeDefined();
+      const context = { activity: {} } as never;
+      expect(await callback!(context)).toEqual({
+        status: 200,
+        body: {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.activity.message',
+          value: 'Tool recorded.',
+        },
+      });
+      expect(onToolAction).toHaveBeenCalledWith(entry, context);
+    } finally {
+      on.mockRestore();
+    }
   });
   it.each(['http', 'socket'] as const)('keeps unchanged %s apps and replaces changed credentials', async (transport) => {
     const factory = vi.fn(fakeApp);

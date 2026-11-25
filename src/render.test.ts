@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { approvalCard, chunkMarkdown, decidedApprovalCard, formatToolResult, toolCard } from './render.js';
+import {
+  approvalCard,
+  chunkMarkdown,
+  decidedApprovalCard,
+  formatToolResult,
+  runningCard,
+  toolButtonActions,
+  toolCard,
+} from './render.js';
 
 describe('render', () => {
   it('returns a single chunk for short text', () => {
@@ -94,5 +102,49 @@ describe('render', () => {
   it('formats error and rejected results', () => {
     expect(formatToolResult({ status: 'error', error: 'boom' })).toMatch(/boom/);
     expect(formatToolResult({ status: 'rejected', message: 'no' })).toMatch(/no/);
+  });
+});
+
+describe('toolButtonActions', () => {
+  it('builds Action.Execute buttons with tool payloads', () => {
+    const actions = toolButtonActions([
+      { title: 'Add 👍', tool: 'teams__post_reaction', args: { reaction: 'like' } },
+      {
+        title: 'List',
+        tool: 'teams__list_conversations',
+        resultCard: { type: 'AdaptiveCard', body: [] },
+      },
+    ]);
+    expect(actions).toEqual([
+      {
+        type: 'Action.Execute',
+        title: 'Add 👍',
+        data: { action: 'tool', tool: 'teams__post_reaction', args: { reaction: 'like' } },
+      },
+      {
+        type: 'Action.Execute',
+        title: 'List',
+        data: {
+          action: 'tool',
+          tool: 'teams__list_conversations',
+          resultCard: { type: 'AdaptiveCard', body: [] },
+        },
+      },
+    ]);
+  });
+});
+
+describe('runningCard', () => {
+  it('renders a running header with no actions', () => {
+    const card = runningCard('teams__post_reaction');
+    expect(JSON.stringify(card)).toContain('Running teams__post_reaction');
+    expect(card.actions ?? []).toHaveLength(0);
+  });
+
+  it('truncates an over-long tool name', () => {
+    const tool = 't'.repeat(200);
+    const text = JSON.stringify(runningCard(tool));
+    expect(text).toContain(`Running ${'t'.repeat(63)}…`);
+    expect(text).not.toContain(tool);
   });
 });
