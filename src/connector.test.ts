@@ -530,6 +530,119 @@ describe('TeamsConnector', () => {
         await connector.stop();
       }
     });
+
+    it('runs a group-chat tool as the clicker in the mapped group conversation', async () => {
+      const { app, deps, updates } = setup();
+      const factory = vi.fn<TeamsAppFactory>(() => app);
+      const dir = await mkdtemp(join(tmpdir(), 'teams-tool-group-'));
+      const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+      const callTool = vi.fn(async () => ({
+        result: { status: 'success', data: { reaction: 'like' } },
+        conversationId: 'legion-group',
+      }));
+      await connector.start({ callTool } as never);
+      try {
+        connector['state']!.legionConversations['app:team-eng:19:g@thread.v2'] = 'legion-group';
+        const [entry, handlers] = factory.mock.calls[0];
+        await handlers.onToolAction(entry, {
+          send: vi.fn(),
+          activity: {
+            from: { aadObjectId: 'aad-1', name: 'Alice' },
+            channelData: { tenant: { id: 't' } },
+            conversation: { conversationType: 'groupChat', id: '19:g@thread.v2' },
+            replyToId: 'card-1',
+            value: {
+              action: {
+                data: { action: 'tool', tool: 'teams__post_reaction', args: { reaction: 'like' } },
+              },
+            },
+          },
+        } as never);
+        expect(callTool).toHaveBeenCalledWith(
+          'alice',
+          'teams__post_reaction',
+          { reaction: 'like' },
+          { conversationId: 'legion-group' },
+        );
+        await vi.waitFor(() => expect(updates).toHaveLength(1));
+        expect(updates[0]).toMatchObject({ conversationId: '19:g@thread.v2', activityId: 'card-1' });
+      } finally {
+        await connector.stop();
+      }
+    });
+
+    it('falls back to an empty conversation id when no group participant resolves', async () => {
+      const { app, deps, updates } = setup();
+      const factory = vi.fn<TeamsAppFactory>(() => app);
+      const dir = await mkdtemp(join(tmpdir(), 'teams-tool-group-unknown-'));
+      const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+      const callTool = vi.fn(async () => ({ result: { status: 'success' }, conversationId: 'c' }));
+      await connector.start({ callTool } as never);
+      try {
+        const [entry, handlers] = factory.mock.calls[0];
+        await handlers.onToolAction(entry, {
+          send: vi.fn(),
+          activity: {
+            from: { aadObjectId: 'aad-1' },
+            channelData: { tenant: { id: 't' } },
+            conversation: { conversationType: 'groupChat', id: '19:unknown@thread.v2' },
+            replyToId: 'card-1',
+            value: { action: { data: { action: 'tool', tool: 'teams__post_reaction' } } },
+          },
+        } as never);
+        expect(callTool).toHaveBeenCalledWith(
+          'alice',
+          'teams__post_reaction',
+          {},
+          { conversationId: '' },
+        );
+        await vi.waitFor(() => expect(updates).toHaveLength(1));
+      } finally {
+        await connector.stop();
+      }
+    });
+
+    it('logs and swallows a result-card build failure instead of rejecting', async () => {
+      const { app, deps, updates } = setup();
+      const factory = vi.fn<TeamsAppFactory>(() => app);
+      const dir = await mkdtemp(join(tmpdir(), 'teams-tool-circular-'));
+      const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      const callTool = vi.fn(async () => ({
+        result: { status: 'success', data: [circular] },
+        conversationId: 'c1',
+      }));
+      await connector.start({ callTool } as never);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const [entry, handlers] = factory.mock.calls[0];
+        const response = await handlers.onToolAction(entry, {
+          send: vi.fn(),
+          activity: {
+            from: { aadObjectId: 'aad-1' },
+            channelData: { tenant: { id: 't' } },
+            conversation: { conversationType: 'personal', id: 'conv-1' },
+            replyToId: 'card-1',
+            value: { action: { data: { action: 'tool', tool: 'teams__post_reaction' } } },
+          },
+        } as never);
+        expect(response).toMatchObject({
+          status: 200,
+          body: { statusCode: 200, type: 'application/vnd.microsoft.card.adaptive' },
+        });
+        await vi.waitFor(() =>
+          expect(errorSpy).toHaveBeenCalledWith(
+            expect.stringContaining('Teams card action result'),
+            expect.stringContaining('circular'),
+          ),
+        );
+        expect(updates).toHaveLength(0);
+      } finally {
+        await connector.stop();
+        errorSpy.mockRestore();
+      }
+    });
   });
 
 });

@@ -282,34 +282,34 @@ export class TeamsConnector implements Connector {
     const maxCardBytes = this.options.maxCardBytes;
 
     void (async () => {
-      let result: ToolResult;
       try {
-        const call = await ctx.callTool(
-          participant.id,
-          tool,
-          args ?? {},
-          { conversationId: legionConversationId ?? '' },
+        let result: ToolResult;
+        try {
+          const call = await ctx.callTool(
+            participant.id,
+            tool,
+            args ?? {},
+            { conversationId: legionConversationId ?? '' },
+          );
+          result = call.result;
+        } catch (error) {
+          result = { status: 'error', error: describeError(error) };
+        }
+
+        const card = buildResultCard(
+          resultTemplate,
+          {
+            status: result.status,
+            data: result.data,
+            error: result.error,
+            message: result.message,
+            tool,
+            args,
+            clicker,
+          },
+          maxCardBytes,
         );
-        result = call.result;
-      } catch (error) {
-        result = { status: 'error', error: describeError(error) };
-      }
 
-      const card = buildResultCard(
-        resultTemplate,
-        {
-          status: result.status,
-          data: result.data,
-          error: result.error,
-          message: result.message,
-          tool,
-          args,
-          clicker,
-        },
-        maxCardBytes,
-      );
-
-      try {
         const activity = new MessageActivityInput().addCard('adaptive', card);
         if (cardActivityId) {
           await app.api.conversations.updateActivity(teamsConversationId, cardActivityId, activity);
@@ -317,7 +317,8 @@ export class TeamsConnector implements Connector {
           await app.send(teamsConversationId, activity);
         }
       } catch (error) {
-        console.error('Teams card action result delivery failed', describeError(error));
+        // Rendering or delivery failures are logged; the ack already went out.
+        console.error('Teams card action result failed', describeError(error));
       }
     })();
 
