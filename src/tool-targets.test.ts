@@ -119,6 +119,78 @@ describe('resolveConversationTarget', () => {
     });
   });
 
+  it('stores a group conversation record when none exists', async () => {
+    const { deps, app } = setup();
+    await resolveConversationTarget(deps, 'app', app, { participantId: 'team-eng' });
+    const stored = deps.state.conversations['app:team-eng:19:g@thread.v2'];
+    expect(stored).toMatchObject({
+      conversationId: '19:g@thread.v2',
+      conversationType: 'groupChat',
+      externalId: '19:g@thread.v2',
+    });
+  });
+
+  it('falls back to a personal variant record without identities', async () => {
+    const { deps, app, create } = setup({
+      participants: [
+        { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'fallback', identities: [] },
+      ],
+      conversations: {
+        'app:fallback:aad-9': {
+          conversationId: 'conv-9',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    expect(await resolveConversationTarget(deps, 'app', app, { participantId: 'fallback' })).toEqual(
+      { ok: true, value: { conversationId: 'conv-9', key: 'app:fallback:aad-9' } },
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('picks the most recently updated personal variant', async () => {
+    const { deps, app } = setup({
+      participants: [
+        { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'fallback', identities: [] },
+      ],
+      conversations: {
+        'app:fallback:aad-1': {
+          conversationId: 'conv-old',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        'app:fallback:aad-2': {
+          conversationId: 'conv-new',
+          conversationType: 'personal',
+          updatedAt: '2026-02-01T00:00:00.000Z',
+        },
+        'app:fallback:19:g@thread.v2': {
+          conversationId: '19:g@thread.v2',
+          conversationType: 'groupChat',
+          updatedAt: '2026-03-01T00:00:00.000Z',
+        },
+      },
+    });
+    expect(await resolveConversationTarget(deps, 'app', app, { participantId: 'fallback' })).toEqual(
+      { ok: true, value: { conversationId: 'conv-new', key: 'app:fallback:aad-2' } },
+    );
+  });
+
+  it('fails when there is no identity and no variant record', async () => {
+    const { deps, app } = setup({
+      participants: [
+        { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'fallback', identities: [] },
+      ],
+    });
+    const result = await resolveConversationTarget(deps, 'app', app, { participantId: 'fallback' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('has no Teams identity');
+  });
+
   it('resolves a raw conversation that belongs to the bot', async () => {
     const { deps, app } = setup({
       conversations: {

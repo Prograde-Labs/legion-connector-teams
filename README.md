@@ -67,6 +67,9 @@ Options and defaults:
 | `typingIntervalMs` | `4000` | Typing interval; `0` disables it. |
 | `maxMessageChars` | `20000` | Outbound message chunk size. |
 | `learnOutboundThread` | `true` | Record an outbound-initiated Legion conversation as the chat's current thread, so the Teams reply continues it. |
+| `tools` | all three (`cards`, `reactions`, `list`) | Which Teams tools the connector contributes: an array subset of `cards`, `reactions`, `list`, or `false` to contribute none. |
+| `maxMessageRecords` | `2000` | Maximum inbound/outbound Teams message records kept for message-id resolution; oldest records are pruned. |
+| `maxCardBytes` | `28000` | Maximum serialized Adaptive Card size accepted by `teams__send_card`. |
 
 HTTP listens on port 3978 by default, with each bot at `/teams/<participantId>/api/messages` and an unauthenticated `GET /health`. Socket Mode (`"transport": "socket"`) is experimental, intended for new bots, and opens one socket per configured geo per bot; it has no HTTP listener. Teams streaming is supported in 1:1 and group chats; team channels are not supported. Teams allows one open stream per chat, so inbound turns are serialized per conversation.
 
@@ -95,6 +98,40 @@ current thread by default (`learnOutboundThread: true`), so the Teams user's nex
 reply continues that conversation. Set `learnOutboundThread: false` to keep the
 previous thread; the conversation target map is still updated. Cold outreach,
 rosters, retries, and delivery receipts are not supported yet.
+
+## Tools
+
+The connector contributes three Teams tools (controlled by the `tools` option):
+
+| Tool | Parameters | Purpose |
+| --- | --- | --- |
+| `teams__send_card` | `card` (required Adaptive Card object, schema 1.4+), exactly one of `participantId` or `conversationId`, optional `fallbackText`, optional `aiLabel` | Send an Adaptive Card. Cards larger than `maxCardBytes` are rejected. Returns the conversation and activity IDs. |
+| `teams__post_reaction` | `messageId` (required), `reaction` (required, e.g. `like`, `heart`, `1f440_eyes`, `launch`), optional `conversationId`, optional `remove` | Add or, with `remove: true`, remove an emoji reaction on a message. |
+| `teams__list_conversations` | optional `conversationType` (`personal` or `groupChat`), optional `limit` (1–200, default 50) | List the Teams conversations known to the caller's bot, most recently updated first. |
+
+**Visibility is fail-closed.** The tools are registered in Legion's global registry but are hidden from an LLM unless the participant's `tools` map grants them. There are no automatic grants. To grant all three:
+
+```json
+{
+  "tools": {
+    "teams__send_card": {},
+    "teams__post_reaction": {},
+    "teams__list_conversations": {}
+  }
+}
+```
+
+**Authorization guidance.** Set `teams__send_card` to `requires_approval` for agents that post to humans. `teams__post_reaction` may be `auto` or `requires_approval`, depending on the deployment. `teams__list_conversations` is read-only.
+
+**Acting bot.** Each tool acts through the caller's own live `teams-bot`, so the caller must own a `teams-bot` identity. A caller cannot use another participant's bot.
+
+**Targeting.**
+
+- `teams__send_card` takes either a `participantId` (a user or group participant, resolved the same way as outbound `communicate`) or a raw `conversationId` that belongs to the caller's bot.
+- `teams__post_reaction` accepts a Legion message ID or a Teams activity ID as `messageId`. A raw activity ID that the connector has not recorded also needs `conversationId`.
+- Reactions by Legion message ID only work on messages the connector recorded: streamed replies and `deliverMessage` sends. Approval cards and `reply()` fallbacks are not recorded.
+
+**State migration.** The state schema is now v3, which adds message records. State migrates forward automatically on load (v1/v2 to v3). An older connector binary that reads v3 state backs it up and starts empty, so a downgrade resets state.
 
 ## Chat commands
 

@@ -83,19 +83,39 @@ export async function resolveConversationTarget(
   const group = participant.identities?.find((item) => item.connector === 'teams-group');
   if (group) {
     const key = `${appId}:${participantId}:${group.externalId}`;
-    const record = deps.state.conversations[key];
-    return succeed({ conversationId: record?.conversationId ?? group.externalId, key });
-  }
-
-  const user = participant.identities?.find((item) => item.connector === 'teams');
-  if (!user) {
-    return fail(`participant '${participantId}' has no Teams identity`);
+    const record = (deps.state.conversations[key] ??= {
+      conversationId: group.externalId,
+      conversationType: 'groupChat',
+      externalId: group.externalId,
+      updatedAt: new Date().toISOString(),
+    });
+    return succeed({ conversationId: record.conversationId, key });
   }
 
   const key = `${appId}:${participantId}`;
   const existing = deps.state.conversations[key];
   if (existing) {
     return succeed({ conversationId: existing.conversationId, key });
+  }
+
+  const user = participant.identities?.find((item) => item.connector === 'teams');
+  if (!user) {
+    let variantKey: string | undefined;
+    for (const [candidateKey, candidate] of Object.entries(deps.state.conversations)) {
+      if (
+        candidateKey.startsWith(`${key}:`) &&
+        (candidate.conversationType ?? 'personal') === 'personal' &&
+        (variantKey === undefined ||
+          candidate.updatedAt > (deps.state.conversations[variantKey]?.updatedAt ?? ''))
+      ) {
+        variantKey = candidateKey;
+      }
+    }
+    const variant = variantKey === undefined ? undefined : deps.state.conversations[variantKey];
+    if (variantKey === undefined || !variant) {
+      return fail(`participant '${participantId}' has no Teams identity`);
+    }
+    return succeed({ conversationId: variant.conversationId, key: variantKey });
   }
 
   try {
