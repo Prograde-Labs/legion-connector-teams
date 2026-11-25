@@ -19,7 +19,10 @@ function setup() {
       return { id: 'activity-1' };
     },
     api: {
-      conversations: { create: async () => ({ id: 'conv-new' }) },
+      conversations: {
+        create: async () => ({ id: 'conv-new' }),
+        updateActivity: async () => undefined,
+      },
       reactions: { add: async () => undefined, delete: async () => undefined },
     },
     on() {},

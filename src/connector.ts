@@ -79,6 +79,8 @@ export class TeamsConnector implements Connector {
       onInstall: (bot, context) => this.onInstall(bot, context),
       onConversationUpdate: (bot, context) => this.onInstall(bot, context),
       onApproval: (bot, context, decision) => this.onApproval(bot, context, decision),
+      // Task 5 replaces this placeholder with `this.onToolAction(bot, context)`.
+      onToolAction: async () => approvalResponse('Tool actions are not supported.'),
     });
     await this.pool.start(directory.bots);
 

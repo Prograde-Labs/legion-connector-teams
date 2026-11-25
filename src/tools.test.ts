@@ -33,7 +33,13 @@ function setup(
       sent.push({ conversationId, activity });
       return { id: `act-${sent.length}` };
     },
-    api: { conversations: { create }, reactions },
+    api: {
+      conversations: {
+        create,
+        updateActivity: async () => undefined,
+      },
+      reactions,
+    },
     on: () => undefined,
   };
   const collective = {

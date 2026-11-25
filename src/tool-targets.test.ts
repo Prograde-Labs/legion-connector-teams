@@ -28,7 +28,10 @@ function setup(
     stop: async () => undefined,
     send: async () => ({ id: 'act-1' }),
     api: {
-      conversations: { create },
+      conversations: {
+        create,
+        updateActivity: async () => undefined,
+      },
       reactions: { add: async () => undefined, delete: async () => undefined },
     },
     on: () => undefined,
