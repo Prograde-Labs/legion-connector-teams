@@ -7,7 +7,7 @@ import type { CollectiveLike } from './directory.js';
 
 function setup(participants: Array<Record<string, unknown>>, conversations: Record<string, unknown> = {}) {
   const state = { ...emptyState(), conversations };
-  const send = vi.fn(async (_conversationId: string, _activity: unknown) => undefined);
+  const send = vi.fn(async (_conversationId: string, _activity: unknown) => ({ id: 'act-1' }));
   const create = vi.fn(async () => ({ id: 'conv-new' }));
   const save = vi.fn(async () => undefined);
   const collective = {
@@ -463,4 +463,43 @@ describe('deliverMessage', () => {
     } finally { log.mockRestore(); }
   });
 
+});
+
+describe('deliverMessage message records', () => {
+  it('records outbound activity ids and maps the first chunk to the Legion message', async () => {
+    const s = setup(
+      [
+        { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+        { id: 'alice', identities: [{ connector: 'teams', externalId: 'aad-1' }] },
+      ],
+      { 'app:alice': { conversationId: 'conv-1', updatedAt: 'now' } },
+    );
+    const send = vi.fn(async () => ({ id: 'teams-act-1' }));
+    s.apps.getByAppId = () => ({ send, api: { conversations: { create: s.create } } }) as never;
+
+    await deliverMessage(
+      {
+        collective: s.collective,
+        state: s.state as never,
+        stateStore: { save: s.save } as never,
+        apps: s.apps as never,
+        options: resolveOptions({ stateDir: '/tmp/x', maxMessageRecords: 10 }),
+      },
+      {
+        id: 'legion-msg-1',
+        senderId: 'assistant',
+        recipientId: 'alice',
+        conversationId: 'legion-1',
+        content: 'hello',
+      },
+    );
+
+    expect(s.state.messages['app:teams-act-1']).toMatchObject({
+      direction: 'outbound',
+      conversationId: 'conv-1',
+      legionMessageId: 'legion-msg-1',
+      legionConversationId: 'legion-1',
+    });
+    expect(s.state.legionMessages['legion-msg-1']).toBe('app:teams-act-1');
+  });
 });

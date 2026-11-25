@@ -564,3 +564,48 @@ describe('handleInbound group chats', () => {
     expect(s.state.pendingPairs[code]).toBeDefined();
   });
 });
+
+describe('handleInbound message records', () => {
+  it('records inbound and outbound message ids after a turn', async () => {
+    const s = setup([
+      alice,
+      { id: 'assistant', identities: [{ connector: 'teams-bot', externalId: 'app' }] },
+    ]);
+    s.streamTool = vi.fn(async () => ({
+      conversationId: 'conv-1',
+      gen: (async function* (): AsyncGenerator<StreamChunk> {
+        yield {
+          type: 'stream:done',
+          result: {
+            status: 'success',
+            data: { conversationId: 'thread-1', storedMessageId: 'msg-1' },
+          },
+        };
+      })(),
+    }));
+    const ctx = { ...s.ctx, streamTool: s.streamTool } as unknown as ConnectorContext;
+    const stream = {
+      emit() {},
+      update() {},
+      async close() {
+        return { id: 'act-out-1' };
+      },
+    };
+
+    await handleInbound(
+      { ...inboundDeps(s), ctx },
+      { activity: { ...activity('hello'), id: 'act-in-1' }, send: captureReply(), stream },
+    );
+
+    expect(s.state.messages['app:act-in-1']).toMatchObject({
+      direction: 'inbound',
+      legionMessageId: 'msg-1',
+      conversationId: 'conv-1',
+    });
+    expect(s.state.messages['app:act-out-1']).toMatchObject({
+      direction: 'outbound',
+      conversationId: 'conv-1',
+    });
+    expect(s.save).toHaveBeenCalled();
+  });
+});

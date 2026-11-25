@@ -14,8 +14,14 @@ export interface TeamsAppLike {
   initialize(): Promise<void>;
   start(): Promise<void>;
   stop(): Promise<void>;
-  send(conversationId: string, activity: unknown): Promise<unknown>;
-  api: { conversations: { create(params: Record<string, unknown>): Promise<{ id: string }> } };
+  send(conversationId: string, activity: unknown): Promise<{ id?: string }>;
+  api: {
+    conversations: { create(params: Record<string, unknown>): Promise<{ id: string }> };
+    reactions: {
+      add(conversationId: string, activityId: string, type: string): Promise<void>;
+      delete(conversationId: string, activityId: string, type: string): Promise<void>;
+    };
+  };
   on(event: string, handler: (ctx: unknown) => Promise<void> | void): void;
 }
 

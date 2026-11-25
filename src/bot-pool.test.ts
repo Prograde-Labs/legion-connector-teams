@@ -15,8 +15,14 @@ function fakeApp(): TeamsAppLike & { sent: unknown[]; stopped: number; initializ
     async initialize() { this.initialized++; },
     async start() { this.initialized++; },
     async stop() { this.stopped++; },
-    async send(_conversationId: string, activity: unknown) { this.sent.push(activity); },
-    api: { conversations: { create: async () => ({ id: 'conv' }) } },
+    async send(_conversationId: string, activity: unknown) {
+      this.sent.push(activity);
+      return { id: 'act-1' };
+    },
+    api: {
+      conversations: { create: async () => ({ id: 'conv' }) },
+      reactions: { add: async () => undefined, delete: async () => undefined },
+    },
     on() {},
   };
 }

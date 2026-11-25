@@ -14,8 +14,14 @@ function setup() {
     async initialize() {},
     async start() {},
     async stop() {},
-    async send(conversationId, activity) { sent.push({ conversationId, activity }); },
-    api: { conversations: { create: async () => ({ id: 'conv-new' }) } },
+    async send(conversationId, activity) {
+      sent.push({ conversationId, activity });
+      return { id: 'activity-1' };
+    },
+    api: {
+      conversations: { create: async () => ({ id: 'conv-new' }) },
+      reactions: { add: async () => undefined, delete: async () => undefined },
+    },
     on() {},
   };
   const participants = [

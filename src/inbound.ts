@@ -20,8 +20,10 @@ import {
 import type { ResolvedOptions } from './options.js';
 import { sendText } from './render.js';
 import type { StateStore, TeamsState } from './state.js';
+import { recordMessage } from './tool-state.js';
 
 export interface TeamsActivity {
+  id?: string;
   from?: { id?: string; name?: string; aadObjectId?: string };
   recipient?: { id?: string };
   conversation?: { id?: string; name?: string; conversationType?: string };
@@ -239,7 +241,7 @@ async function runTurn(args: {
   }
 
   try {
-    const { conversationId } = await runCommunicate({
+    const turn = await runCommunicate({
       ctx: deps.ctx,
       userId: participantId,
       botOwnerId: deps.bot.participantId,
@@ -250,11 +252,47 @@ async function runTurn(args: {
       send: (activity) => context.send(activity),
       stopTyping,
     });
+
+    const { conversationId, storedMessageId, outboundActivityId } = turn;
+    let changed = false;
     if (conversationId !== undefined) {
       deps.state.legionConversations[key] = conversationId;
       deps.state.legionConversationTargets[conversationId] = key;
-      await deps.stateStore.save(deps.state);
+      changed = true;
     }
+
+    const teamsConversationId = context.activity.conversation?.id;
+    const inboundActivityId = context.activity.id;
+    if (teamsConversationId && inboundActivityId && storedMessageId) {
+      recordMessage(
+        deps.state,
+        {
+          appId: deps.bot.appId,
+          conversationId: teamsConversationId,
+          activityId: inboundActivityId,
+          direction: 'inbound',
+          legionMessageId: storedMessageId,
+          ...(conversationId === undefined ? {} : { legionConversationId: conversationId }),
+        },
+        deps.options.maxMessageRecords,
+      );
+      changed = true;
+    }
+    if (teamsConversationId && outboundActivityId) {
+      recordMessage(
+        deps.state,
+        {
+          appId: deps.bot.appId,
+          conversationId: teamsConversationId,
+          activityId: outboundActivityId,
+          direction: 'outbound',
+          ...(conversationId === undefined ? {} : { legionConversationId: conversationId }),
+        },
+        deps.options.maxMessageRecords,
+      );
+      changed = true;
+    }
+    if (changed) await deps.stateStore.save(deps.state);
   } finally {
     stopTyping();
   }

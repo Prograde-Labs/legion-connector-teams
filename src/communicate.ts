@@ -29,7 +29,16 @@ export interface CommunicateDeps {
 export async function runCommunicate(deps: CommunicateDeps): Promise<{
   result: ToolResult;
   conversationId: string | undefined;
+  storedMessageId?: string;
+  outboundActivityId?: string;
 }> {
+  let outboundActivityId: string | undefined;
+  const closeStream = async (): Promise<void> => {
+    if (!deps.stream) return;
+    const sent = await deps.stream.close();
+    outboundActivityId = sent?.id ?? outboundActivityId;
+  };
+
   const { gen, conversationId } = await deps.ctx.streamTool(deps.userId, 'communicate', {
     to: deps.botOwnerId,
     message: deps.text,
@@ -118,7 +127,7 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
           // approval; the resumed reply arrives as a separate message.
           if (final.status === 'pending_approval') deps.stream.update('Awaiting approval…');
           closed = true;
-          await deps.stream.close();
+          await closeStream();
         }
         break;
       case 'stream:error':
@@ -147,14 +156,17 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
     if (buffer) await reply(buffer);
   } else if (!closed) {
     closed = true;
-    await deps.stream.close();
+    await closeStream();
   }
 
   const data = final?.data as {
     conversationId?: unknown;
     response?: unknown;
     approvalRequests?: ApprovalRequest[];
+    storedMessageId?: unknown;
   } | undefined;
+  const storedMessageId =
+    typeof data?.storedMessageId === 'string' ? data.storedMessageId : undefined;
   if (!buffer && typeof data?.response === 'string') {
     await reply(data.response);
   }
@@ -174,5 +186,7 @@ export async function runCommunicate(deps: CommunicateDeps): Promise<{
     conversationId: typeof data?.conversationId === 'string'
       ? data.conversationId
       : final?.status === 'error' ? undefined : conversationId,
+    ...(storedMessageId === undefined ? {} : { storedMessageId }),
+    ...(outboundActivityId === undefined ? {} : { outboundActivityId }),
   };
 }
