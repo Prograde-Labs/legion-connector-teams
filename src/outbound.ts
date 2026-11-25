@@ -6,10 +6,11 @@ import type { ResolvedOptions } from './options.js';
 import { chunkMarkdown, type ApprovalRequest } from './render.js';
 import { describeError } from './errors.js';
 import { sendApprovalCards } from './approvals.js';
+import { recordMessage } from './tool-state.js';
 import type { ConversationRecord, StateStore, TeamsState } from './state.js';
 
 export interface OutboundApp {
-  send(conversationId: string, activity: MessageActivityInput): Promise<unknown>;
+  send(conversationId: string, activity: MessageActivityInput): Promise<{ id?: string }>;
   api: {
     conversations: {
       create(params: Record<string, unknown>): Promise<{ id: string }>;
@@ -28,6 +29,7 @@ export interface OutboundDeps {
 export async function deliverMessage(
   deps: OutboundDeps,
   message: {
+    id?: string;
     senderId: string;
     recipientId: string;
     conversationId: string;
@@ -139,11 +141,28 @@ export async function deliverMessage(
     };
   }
 
+  let firstChunk = true;
   for (const chunk of chunkMarkdown(message.content, deps.options.maxMessageChars)) {
     const activity = new MessageActivityInput(chunk);
     if (deps.options.aiLabel) activity.addAiGenerated();
     try {
-      await app.send(record.conversationId, activity);
+      const sent = await app.send(record.conversationId, activity);
+      const activityId = sent?.id;
+      if (activityId) {
+        recordMessage(
+          deps.state,
+          {
+            appId,
+            conversationId: record.conversationId,
+            activityId,
+            direction: 'outbound',
+            ...(firstChunk && message.id !== undefined ? { legionMessageId: message.id } : {}),
+            legionConversationId: message.conversationId,
+          },
+          deps.options.maxMessageRecords,
+        );
+      }
+      firstChunk = false;
     } catch (error) {
       const reason = describeError(error);
       console.error('Teams message delivery failed', reason);

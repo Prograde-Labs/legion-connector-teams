@@ -21,21 +21,35 @@ export interface PendingPair {
   expiresAt: string;
 }
 
+export interface MessageRecord {
+  appId: string;
+  conversationId: string;
+  activityId: string;
+  direction: 'inbound' | 'outbound';
+  legionMessageId?: string;
+  legionConversationId?: string;
+  createdAt: string;
+}
+
 export interface TeamsState {
-  version: 2;
+  version: 3;
   conversations: Record<string, ConversationRecord>;
   pendingPairs: Record<string, PendingPair>;
   legionConversations: Record<string, string>;
   legionConversationTargets: Record<string, string>;
+  messages: Record<string, MessageRecord>;
+  legionMessages: Record<string, string>;
 }
 
 export function emptyState(): TeamsState {
   return {
-    version: 2,
+    version: 3,
     conversations: {},
     pendingPairs: {},
     legionConversations: {},
     legionConversationTargets: {},
+    messages: {},
+    legionMessages: {},
   };
 }
 
@@ -78,7 +92,15 @@ function isV1(value: unknown): value is V1State {
   );
 }
 
-function isV2(value: unknown): value is TeamsState {
+interface V2State {
+  version: 2;
+  conversations: Record<string, ConversationRecord>;
+  pendingPairs: Record<string, PendingPair>;
+  legionConversations: Record<string, string>;
+  legionConversationTargets?: Record<string, string>;
+}
+
+function isV2(value: unknown): value is V2State {
   return (
     isPlainObject(value) &&
     value.version === 2 &&
@@ -86,6 +108,19 @@ function isV2(value: unknown): value is TeamsState {
     isPlainObject(value.pendingPairs) &&
     isPlainObject(value.legionConversations) &&
     (value.legionConversationTargets === undefined || isPlainObject(value.legionConversationTargets))
+  );
+}
+
+function isV3(value: unknown): value is TeamsState {
+  return (
+    isPlainObject(value) &&
+    value.version === 3 &&
+    isPlainObject(value.conversations) &&
+    isPlainObject(value.pendingPairs) &&
+    isPlainObject(value.legionConversations) &&
+    isPlainObject(value.legionConversationTargets) &&
+    isPlainObject(value.messages) &&
+    isPlainObject(value.legionMessages)
   );
 }
 
@@ -118,21 +153,37 @@ function migrateV1(v1: V1State): TeamsState {
   }
 
   return {
-    version: 2,
+    version: 3,
     conversations,
     pendingPairs,
     legionConversations: v1.legionConversations,
     legionConversationTargets: {},
+    messages: {},
+    legionMessages: {},
   };
 }
 
-function normalizeV2(parsed: TeamsState): TeamsState {
+function migrateV2(v2: V2State): TeamsState {
   return {
-    version: 2,
+    version: 3,
+    conversations: v2.conversations ?? {},
+    pendingPairs: v2.pendingPairs ?? {},
+    legionConversations: v2.legionConversations ?? {},
+    legionConversationTargets: v2.legionConversationTargets ?? {},
+    messages: {},
+    legionMessages: {},
+  };
+}
+
+function normalizeV3(parsed: TeamsState): TeamsState {
+  return {
+    version: 3,
     conversations: parsed.conversations ?? {},
     pendingPairs: parsed.pendingPairs ?? {},
     legionConversations: parsed.legionConversations ?? {},
     legionConversationTargets: parsed.legionConversationTargets ?? {},
+    messages: parsed.messages ?? {},
+    legionMessages: parsed.legionMessages ?? {},
   };
 }
 
@@ -160,7 +211,8 @@ export class StateStore {
       return emptyState();
     }
 
-    if (isV2(parsed)) return normalizeV2(parsed);
+    if (isV3(parsed)) return normalizeV3(parsed);
+    if (isV2(parsed)) return migrateV2(parsed);
     if (isV1(parsed)) return migrateV1(parsed);
 
     await this.backup();

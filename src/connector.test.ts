@@ -14,8 +14,14 @@ function setup() {
     async initialize() {},
     async start() {},
     async stop() {},
-    async send(conversationId, activity) { sent.push({ conversationId, activity }); },
-    api: { conversations: { create: async () => ({ id: 'conv-new' }) } },
+    async send(conversationId, activity) {
+      sent.push({ conversationId, activity });
+      return { id: 'activity-1' };
+    },
+    api: {
+      conversations: { create: async () => ({ id: 'conv-new' }) },
+      reactions: { add: async () => undefined, delete: async () => undefined },
+    },
     on() {},
   };
   const participants = [
@@ -264,4 +270,42 @@ describe('TeamsConnector', () => {
     expect(connector.canDeliver('assistant')).toBe(false);
   });
 
+});
+
+it('exposes only the configured Teams tools after start', async () => {
+  const { app, deps } = setup();
+  const dir = await mkdtemp(join(tmpdir(), 'teams-tools-'));
+  const connector = new TeamsConnector(
+    { stateDir: dir, port: 0, tools: ['cards'] },
+    deps,
+    () => app,
+  );
+  await connector.start({} as never);
+  try {
+    expect(connector.tools().map((tool) => tool.name)).toEqual(['teams__send_card']);
+  } finally {
+    await connector.stop();
+  }
+});
+
+it('exposes all Teams tools by default after start', async () => {
+  const { app, deps } = setup();
+  const dir = await mkdtemp(join(tmpdir(), 'teams-tools-default-'));
+  const connector = new TeamsConnector({ stateDir: dir, port: 0 }, deps, () => app);
+  await connector.start({} as never);
+  try {
+    expect(connector.tools().map((tool) => tool.name)).toEqual([
+      'teams__send_card',
+      'teams__post_reaction',
+      'teams__list_conversations',
+    ]);
+  } finally {
+    await connector.stop();
+  }
+});
+
+it('exposes no tools before start', () => {
+  const { app, deps } = setup();
+  const connector = new TeamsConnector({ stateDir: '/tmp/x' }, deps, () => app);
+  expect(connector.tools()).toEqual([]);
 });

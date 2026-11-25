@@ -319,3 +319,29 @@ describe('runCommunicate', () => {
     expect(stream.closed).toBe(1);
   });
 });
+
+describe('runCommunicate activity ids', () => {
+  it('returns the stored Legion message id and the streamed activity id', async () => {
+    const stream = fakeStream();
+    const ctx = fakeCtx([
+      {
+        type: 'stream:done',
+        result: {
+          status: 'success',
+          data: { conversationId: 'thread-1', storedMessageId: 'msg-1' },
+        },
+      },
+    ]);
+    const result = await runCommunicate({
+      ctx,
+      userId: 'alice',
+      botOwnerId: 'assistant',
+      text: 'hi',
+      options: options(),
+      stream,
+      send: async () => undefined,
+    });
+    expect(result.storedMessageId).toBe('msg-1');
+    expect(result.outboundActivityId).toBe('m1');
+  });
+});
