@@ -5,25 +5,29 @@ import type {
   ConnectorContext,
   ConnectorRuntimeDeps,
   DeliveryOutcome,
+  ToolResult,
 } from '@legion-collective/core';
+import { MessageActivityInput } from '@microsoft/teams.api';
+import type { IAdaptiveCard } from '@microsoft/teams.cards';
 import { handleApprovalAction, sendResumed, type ResumedItem } from './approvals.js';
 import { BotPool, defaultAppFactory, type CardInvokeResponse, type TeamsAppFactory } from './bot-pool.js';
 import { buildDirectory, type BotEntry } from './directory.js';
 import { describeError } from './errors.js';
-import { findTeamsActor, readTeamsId } from './identity.js';
+import { findGroupActor, findTeamsActor, readTeamsId } from './identity.js';
 import { handleInbound, isBotTenant, tenantMismatchText, type TeamsContextLike } from './inbound.js';
 import { deliverMessage } from './outbound.js';
-import { decidedApprovalCard, type ApprovalRequest } from './render.js';
+import { buildResultCard } from './result-card.js';
+import { decidedApprovalCard, runningCard, type ApprovalRequest } from './render.js';
 import { resolveOptions, type ResolvedOptions, type TeamsConnectorOptions } from './options.js';
 import { SerialQueue } from './serialize.js';
 import { StateStore, type TeamsState } from './state.js';
 import { buildTeamsTools } from './tools.js';
 
-function approvalResponse(value: string): CardInvokeResponse {
+function messageResponse(value: string): CardInvokeResponse {
   return { status: 200, body: { statusCode: 200, type: 'application/vnd.microsoft.activity.message', value } };
 }
 
-function approvalCardResponse(card: ReturnType<typeof decidedApprovalCard>): CardInvokeResponse {
+function cardResponse(card: IAdaptiveCard): CardInvokeResponse {
   return {
     status: 200,
     body: { statusCode: 200, type: 'application/vnd.microsoft.card.adaptive', value: card },
@@ -79,8 +83,7 @@ export class TeamsConnector implements Connector {
       onInstall: (bot, context) => this.onInstall(bot, context),
       onConversationUpdate: (bot, context) => this.onInstall(bot, context),
       onApproval: (bot, context, decision) => this.onApproval(bot, context, decision),
-      // Task 5 replaces this placeholder with `this.onToolAction(bot, context)`.
-      onToolAction: async () => approvalResponse('Tool actions are not supported.'),
+      onToolAction: (bot, context) => this.onToolAction(bot, context),
     });
     await this.pool.start(directory.bots);
 
@@ -147,17 +150,17 @@ export class TeamsConnector implements Connector {
     context: TeamsContextLike,
     decision: 'approve' | 'reject',
   ): Promise<CardInvokeResponse> {
-    if (!this.ctx) return approvalResponse('This bot is not available.');
-    if (!isBotTenant(bot, context.activity)) return approvalResponse(tenantMismatchText);
+    if (!this.ctx) return messageResponse('This bot is not available.');
+    if (!isBotTenant(bot, context.activity)) return messageResponse(tenantMismatchText);
     const conversationType = context.activity.conversation?.conversationType;
     if (conversationType !== 'personal' && !(conversationType === 'groupChat' && this.options.groupChats)) {
-      return approvalResponse(this.options.groupChats
+      return messageResponse(this.options.groupChats
         ? 'Only personal chats and group chats are supported.'
         : 'Only personal chats are supported.');
     }
     const aadObjectId = readTeamsId(context.activity.from);
     const participant = aadObjectId ? findTeamsActor(this.deps.collective, aadObjectId) : undefined;
-    if (!participant) return approvalResponse('Not registered.');
+    if (!participant) return messageResponse('Not registered.');
     const deciderName = participant.name ?? context.activity.from?.name ?? participant.id;
     const actionData = (context.activity.value?.action?.data ?? {}) as {
       approvalId?: string;
@@ -167,7 +170,7 @@ export class TeamsConnector implements Connector {
       reason?: string;
     };
     const approvalId = actionData.approvalId;
-    if (typeof approvalId !== 'string' || !approvalId.trim()) return approvalResponse('Missing approval id.');
+    if (typeof approvalId !== 'string' || !approvalId.trim()) return messageResponse('Missing approval id.');
     // Card input values are merged into the action data for Action.Execute.
     // Only a rejection carries a reason; ignore anything typed before approving.
     const reason =
@@ -182,7 +185,7 @@ export class TeamsConnector implements Connector {
       message: reason,
     });
     if (result.status !== 'success') {
-      return approvalResponse(`Approval failed: ${result.error ?? result.status}`);
+      return messageResponse(`Approval failed: ${result.error ?? result.status}`);
     }
     const results = (result.data as {
       results?: Array<{ approvalId?: string; outcome?: string }>;
@@ -200,7 +203,7 @@ export class TeamsConnector implements Connector {
               : 'rejected'
             : undefined;
     if (!decided) {
-      return approvalResponse(`Approval failed: ${outcome ?? 'unknown outcome'}`);
+      return messageResponse(`Approval failed: ${outcome ?? 'unknown outcome'}`);
     }
     const resumed = (result.data as { resumed?: ResumedItem[] } | undefined)?.resumed;
     if (resumed?.length) {
@@ -210,7 +213,7 @@ export class TeamsConnector implements Connector {
         console.error('Teams resumed delivery failed', describeError(error));
       }
     }
-    return approvalCardResponse(
+    return cardResponse(
       decidedApprovalCard({
         tool: actionData.tool,
         argsText: actionData.argsText,
@@ -220,6 +223,105 @@ export class TeamsConnector implements Connector {
         decidedBy: deciderName,
       }),
     );
+  }
+
+  private async onToolAction(
+    bot: BotEntry,
+    context: TeamsContextLike,
+  ): Promise<CardInvokeResponse> {
+    if (!this.ctx || !this.state || !this.pool) {
+      return messageResponse('This bot is not available.');
+    }
+    if (!isBotTenant(bot, context.activity)) return messageResponse(tenantMismatchText);
+    const conversationType = context.activity.conversation?.conversationType;
+    if (conversationType !== 'personal' && !(conversationType === 'groupChat' && this.options.groupChats)) {
+      return messageResponse(this.options.groupChats
+        ? 'Only personal chats and group chats are supported.'
+        : 'Only personal chats are supported.');
+    }
+    const aadObjectId = readTeamsId(context.activity.from);
+    const participant = aadObjectId ? findTeamsActor(this.deps.collective, aadObjectId) : undefined;
+    if (!participant) return messageResponse('Not registered.');
+
+    const data = (context.activity.value?.action?.data ?? {}) as {
+      tool?: unknown;
+      args?: unknown;
+      resultCard?: unknown;
+    };
+    const tool = typeof data.tool === 'string' ? data.tool.trim() : '';
+    if (!tool) return messageResponse('Missing tool.');
+    if (
+      data.args !== undefined &&
+      (typeof data.args !== 'object' || data.args === null || Array.isArray(data.args))
+    ) {
+      return messageResponse('Invalid args.');
+    }
+
+    const teamsConversationId = context.activity.conversation?.id;
+    if (!teamsConversationId) return messageResponse('Missing conversation.');
+    const cardActivityId = context.activity.replyToId;
+    const app = this.pool.getByAppId(bot.appId);
+    if (!app) return messageResponse('Teams app is not running.');
+
+    // Mirror the keys written by inbound/outbound so the clicker continues in
+    // the same Legion conversation as their messages.
+    let conversationKey: string | undefined;
+    if (conversationType === 'groupChat') {
+      const group = findGroupActor(this.deps.collective, teamsConversationId);
+      conversationKey = group ? `${bot.appId}:${group.id}:${teamsConversationId}` : undefined;
+    } else {
+      conversationKey = `${bot.appId}:${participant.id}`;
+    }
+    const legionConversationId = conversationKey === undefined
+      ? undefined
+      : this.state.legionConversations[conversationKey];
+    const clicker = { id: participant.id, name: participant.name };
+    const args = data.args;
+    const resultTemplate = data.resultCard;
+    const ctx = this.ctx;
+    const maxCardBytes = this.options.maxCardBytes;
+
+    void (async () => {
+      let result: ToolResult;
+      try {
+        const call = await ctx.callTool(
+          participant.id,
+          tool,
+          args ?? {},
+          { conversationId: legionConversationId ?? '' },
+        );
+        result = call.result;
+      } catch (error) {
+        result = { status: 'error', error: describeError(error) };
+      }
+
+      const card = buildResultCard(
+        resultTemplate,
+        {
+          status: result.status,
+          data: result.data,
+          error: result.error,
+          message: result.message,
+          tool,
+          args,
+          clicker,
+        },
+        maxCardBytes,
+      );
+
+      try {
+        const activity = new MessageActivityInput().addCard('adaptive', card);
+        if (cardActivityId) {
+          await app.api.conversations.updateActivity(teamsConversationId, cardActivityId, activity);
+        } else {
+          await app.send(teamsConversationId, activity);
+        }
+      } catch (error) {
+        console.error('Teams card action result delivery failed', describeError(error));
+      }
+    })();
+
+    return cardResponse(runningCard(tool));
   }
 
   async deliver(message: {
