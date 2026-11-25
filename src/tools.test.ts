@@ -169,6 +169,162 @@ describe('teams__send_card', () => {
     expect(result.status).toBe('error');
     expect(result.error).toContain('exactly one');
   });
+
+  it('appends tool buttons to the card actions', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    const result = await run(sendCardTool(s.deps), s.context, {
+      participantId: 'alice',
+      card: { type: 'AdaptiveCard', version: '1.4', body: [] },
+      buttons: [
+        { title: 'Add 👍', tool: 'teams__post_reaction', args: { reaction: 'like' } },
+      ],
+    });
+    expect(result.status).toBe('success');
+    const activity = s.sent[0]?.activity as {
+      attachments?: Array<{ content: { actions?: unknown[] } }>;
+    };
+    expect(activity.attachments?.[0]?.content?.actions).toEqual([
+      {
+        type: 'Action.Execute',
+        title: 'Add 👍',
+        data: { action: 'tool', tool: 'teams__post_reaction', args: { reaction: 'like' } },
+      },
+    ]);
+  });
+
+  it('rejects more than six buttons', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    const result = await run(sendCardTool(s.deps), s.context, {
+      participantId: 'alice',
+      card: { type: 'AdaptiveCard', version: '1.4', body: [] },
+      buttons: Array.from({ length: 7 }, (_, index) => ({ title: `B${index}`, tool: 't' })),
+    });
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('at most 6');
+  });
+
+  it('rejects a button without a title or tool', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    const noTitle = await run(sendCardTool(s.deps), s.context, {
+      participantId: 'alice',
+      card: { type: 'AdaptiveCard', version: '1.4', body: [] },
+      buttons: [{ tool: 'teams__post_reaction' }],
+    });
+    expect(noTitle.status).toBe('error');
+    expect(noTitle.error).toContain('title');
+    const noTool = await run(sendCardTool(s.deps), s.context, {
+      participantId: 'alice',
+      card: { type: 'AdaptiveCard', version: '1.4', body: [] },
+      buttons: [{ title: 'Go' }],
+    });
+    expect(noTool.status).toBe('error');
+    expect(noTool.error).toContain('tool');
+  });
+
+  it('rejects non-object args and resultCard', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    const badArgs = await run(sendCardTool(s.deps), s.context, {
+      participantId: 'alice',
+      card: { type: 'AdaptiveCard', version: '1.4', body: [] },
+      buttons: [{ title: 'Go', tool: 't', args: [] }],
+    });
+    expect(badArgs.status).toBe('error');
+    expect(badArgs.error).toContain('args');
+    const badCard = await run(sendCardTool(s.deps), s.context, {
+      participantId: 'alice',
+      card: { type: 'AdaptiveCard', version: '1.4', body: [] },
+      buttons: [{ title: 'Go', tool: 't', resultCard: 'nope' }],
+    });
+    expect(badCard.status).toBe('error');
+    expect(badCard.error).toContain('resultCard');
+  });
+
+  it('rejects a card whose existing actions plus buttons exceed six', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    const result = await run(sendCardTool(s.deps), s.context, {
+      participantId: 'alice',
+      card: {
+        type: 'AdaptiveCard',
+        version: '1.4',
+        body: [],
+        actions: Array.from({ length: 5 }, () => ({
+          type: 'Action.Execute',
+          title: 'x',
+          data: {},
+        })),
+      },
+      buttons: [
+        { title: 'A', tool: 't' },
+        { title: 'B', tool: 't' },
+      ],
+    });
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('at most 6 actions');
+  });
+
+  it('enforces maxCardBytes after adding buttons', async () => {
+    const s = setup({
+      conversations: {
+        'app:alice': {
+          conversationId: 'conv-1',
+          conversationType: 'personal',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      options: { maxCardBytes: 200 },
+    });
+    const result = await run(sendCardTool(s.deps), s.context, {
+      participantId: 'alice',
+      card: {
+        type: 'AdaptiveCard',
+        version: '1.4',
+        body: [{ type: 'TextBlock', text: 'x'.repeat(100) }],
+      },
+      buttons: [{ title: 'Go', tool: 'teams__post_reaction', args: { note: 'y'.repeat(150) } }],
+    });
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('max 200');
+  });
 });
 
 describe('teams__post_reaction', () => {
