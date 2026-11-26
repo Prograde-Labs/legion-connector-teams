@@ -269,7 +269,14 @@ describe('handleInbound', () => {
     );
     expect(s.callTool).toHaveBeenCalledWith('operator', 'create_user', expect.objectContaining({
       name: 'Alice',
-      tools: { communicate: 'auto', approval_response: 'auto' },
+      tools: {
+        communicate: 'auto',
+        approval_response: 'auto',
+        list_conversations: 'auto',
+        get_conversation: 'auto',
+        query_usage: 'auto',
+        compact_conversation: 'auto',
+      },
     }));
     expect(s.callTool).toHaveBeenCalledWith('operator', 'pair', expect.objectContaining({
       connector: 'teams', externalId: 'aad-7',
@@ -327,7 +334,15 @@ describe('handleInbound', () => {
     );
     expect(s.callTool).toHaveBeenCalledTimes(2);
     expect(s.callTool).toHaveBeenNthCalledWith(1, 'operator', 'modify_user', {
-      id: 'teams-alice-1j42jy', tools: { search: 'auto', communicate: 'auto', approval_response: 'auto' },
+      id: 'teams-alice-1j42jy', tools: {
+        search: 'auto',
+        communicate: 'auto',
+        approval_response: 'auto',
+        list_conversations: 'auto',
+        get_conversation: 'auto',
+        query_usage: 'auto',
+        compact_conversation: 'auto',
+      },
     });
     expect(s.callTool).toHaveBeenNthCalledWith(2, 'operator', 'pair', expect.objectContaining({
       participantId: 'teams-alice-1j42jy', externalId: 'aad-7',
@@ -485,7 +500,14 @@ describe('handleInbound group chats', () => {
     expect(s.callTool).toHaveBeenCalledWith('operator', 'create_user', expect.objectContaining({
       id: 'teams-group-engineering-eqrgnh',
       name: 'Engineering',
-      tools: { communicate: 'auto', approval_response: 'auto' },
+      tools: {
+        communicate: 'auto',
+        approval_response: 'auto',
+        list_conversations: 'auto',
+        get_conversation: 'auto',
+        query_usage: 'auto',
+        compact_conversation: 'auto',
+      },
     }));
     expect(s.callTool).toHaveBeenCalledWith('operator', 'pair', {
       participantId: 'teams-group-engineering-eqrgnh',

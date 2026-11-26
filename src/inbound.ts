@@ -121,7 +121,15 @@ async function autoProvision(
   }
 
   let provisioned;
-  const tools = { ...existing?.tools, communicate: 'auto', approval_response: 'auto' };
+  const tools = {
+    ...existing?.tools,
+    communicate: 'auto',
+    approval_response: 'auto',
+    list_conversations: 'auto',
+    get_conversation: 'auto',
+    query_usage: 'auto',
+    compact_conversation: 'auto',
+  };
   try {
     provisioned = existing
       ? await deps.ctx.callTool(deps.options.provisionerId, 'modify_user', { id, tools })
@@ -180,7 +188,15 @@ async function autoProvisionGroup(
   }
 
   let provisioned;
-  const tools = { ...existing?.tools, communicate: 'auto', approval_response: 'auto' };
+  const tools = {
+    ...existing?.tools,
+    communicate: 'auto',
+    approval_response: 'auto',
+    list_conversations: 'auto',
+    get_conversation: 'auto',
+    query_usage: 'auto',
+    compact_conversation: 'auto',
+  };
   try {
     provisioned = existing
       ? await deps.ctx.callTool(deps.options.provisionerId, 'modify_user', { id, tools })
