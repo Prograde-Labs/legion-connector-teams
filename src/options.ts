@@ -6,6 +6,11 @@ export type ToolDisplay = 'off' | 'status' | 'cards';
 export type TeamsToolName = 'cards' | 'reactions' | 'list';
 const TEAM_TOOL_NAMES: readonly TeamsToolName[] = ['cards', 'reactions', 'list'];
 
+export interface CompactionOptions {
+  agentId: string;
+  instruction?: string;
+}
+
 export interface TeamsConnectorOptions {
   transport?: TeamsTransport;
   port?: number;
@@ -31,6 +36,7 @@ export interface TeamsConnectorOptions {
   tools?: TeamsToolName[] | false;
   maxMessageRecords?: number;
   maxCardBytes?: number;
+  compaction?: CompactionOptions;
 }
 
 export interface ResolvedOptions {
@@ -58,6 +64,7 @@ export interface ResolvedOptions {
   tools: Set<TeamsToolName>;
   maxMessageRecords: number;
   maxCardBytes: number;
+  compaction?: CompactionOptions;
 }
 
 function resolveTools(value: TeamsConnectorOptions['tools']): Set<TeamsToolName> {
@@ -79,6 +86,25 @@ function positiveInteger(value: number | undefined, fallback: number, field: str
     throw new Error(`${field} must be a positive integer`);
   }
   return value;
+}
+
+function resolveCompaction(
+  value: TeamsConnectorOptions['compaction'],
+): CompactionOptions | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('compaction must be an object with an agentId');
+  }
+  if (typeof value.agentId !== 'string' || !value.agentId.trim()) {
+    throw new Error('compaction.agentId must be a non-empty string');
+  }
+  if (value.instruction !== undefined && typeof value.instruction !== 'string') {
+    throw new Error('compaction.instruction must be a string');
+  }
+  return {
+    agentId: value.agentId.trim(),
+    ...(value.instruction === undefined ? {} : { instruction: value.instruction }),
+  };
 }
 
 export function resolveOptions(options: TeamsConnectorOptions): ResolvedOptions {
@@ -114,5 +140,6 @@ export function resolveOptions(options: TeamsConnectorOptions): ResolvedOptions 
     tools: resolveTools(options.tools),
     maxMessageRecords: positiveInteger(options.maxMessageRecords, 2000, 'maxMessageRecords'),
     maxCardBytes: positiveInteger(options.maxCardBytes, 28000, 'maxCardBytes'),
+    compaction: resolveCompaction(options.compaction),
   };
 }
