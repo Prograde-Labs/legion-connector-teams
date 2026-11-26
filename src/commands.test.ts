@@ -5,12 +5,15 @@ import { emptyState } from './state.js';
 import { resolveOptions } from './options.js';
 import { rememberPendingPair } from './pairing.js';
 import type { ConnectorContext } from '@legion-collective/core';
+import type { IAdaptiveCard } from '@microsoft/teams.cards';
 
 function deps(text: string, overrides: Record<string, unknown> = {}) {
   const sent: string[] = [];
+  const cards: IAdaptiveCard[] = [];
   const callTool = vi.fn(async () => ({ result: { status: 'success' }, conversationId: 'c' }));
   return {
     sent,
+    cards,
     callTool,
     deps: {
       appId: 'app',
@@ -21,6 +24,7 @@ function deps(text: string, overrides: Record<string, unknown> = {}) {
       ctx: { callTool } as unknown as ConnectorContext,
       options: resolveOptions({ stateDir: '/tmp/x' }),
       send: async (value: string) => { sent.push(value); },
+      sendCard: async (card: IAdaptiveCard) => { cards.push(card); },
       ...overrides,
     },
   };

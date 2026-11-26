@@ -6,6 +6,7 @@ import { resolveOptions } from './options.js';
 import type { BotEntry, CollectiveLike } from './directory.js';
 import type { ConnectorContext, StreamChunk } from '@legion-collective/core';
 import { rememberPendingPair } from './pairing.js';
+import { TypingActivityInput } from '@microsoft/teams.api';
 
 function setup(participants: Array<Record<string, unknown>> = []) {
   const state = emptyState();
@@ -234,6 +235,16 @@ describe('handleInbound', () => {
     );
     expect(s.state.legionConversations['app:alice']).toBeUndefined();
     expect(s.streamTool).not.toHaveBeenCalled();
+  });
+
+  it('sends a typing indicator while handling a command', async () => {
+    const s = setup([alice]);
+    const send = vi.fn(async () => undefined);
+    await handleInbound(
+      inboundDeps(s, { typingIntervalMs: 60_000 }),
+      { activity: activity('/new'), send },
+    );
+    expect(send).toHaveBeenCalledWith(expect.any(TypingActivityInput));
   });
 
   it('auto-provisions then pairs an unknown user', async () => {

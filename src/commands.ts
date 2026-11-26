@@ -4,6 +4,7 @@ import { isAwaitingApproval } from './approvals.js';
 import { validatePendingPair } from './pairing.js';
 import type { ResolvedOptions } from './options.js';
 import type { TeamsState } from './state.js';
+import type { IAdaptiveCard } from '@microsoft/teams.cards';
 
 const pairingInFlight = new Set<string>();
 
@@ -22,6 +23,8 @@ export interface CommandDeps {
   ctx: ConnectorContext;
   options: ResolvedOptions;
   send: (text: string) => Promise<void>;
+  sendCard: (card: IAdaptiveCard) => Promise<void>;
+  stopTyping?: () => void;
 }
 
 export async function handleCommand(deps: CommandDeps): Promise<boolean> {
