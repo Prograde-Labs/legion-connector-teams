@@ -717,6 +717,50 @@ describe('TeamsConnector', () => {
     }
   });
 
+  it('restores the previous mapping when saving a switch fails', async () => {
+    const { app, deps, updates } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-save-fail-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [
+        { id: 'legion-1', resolvedTitle: 'First', messageCount: 4,
+          updatedAt: '2026-11-24T00:00:00.000Z', status: 'active' },
+        { id: 'legion-2', resolvedTitle: 'Second', messageCount: 2,
+          updatedAt: '2026-11-25T00:00:00.000Z', status: 'active' },
+      ] } },
+      conversationId: 'c',
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      const stateKey = 'app:alice';
+      connector['state']!.legionConversations[stateKey] = 'legion-1';
+      connector['state']!.legionConversationTargets['legion-1'] = stateKey;
+      connector['state']!.legionConversationTargets['legion-2'] = 'app:bob';
+      vi.spyOn(connector['store']!, 'save').mockRejectedValueOnce(new Error('disk full'));
+      const [entry, handlers] = factory.mock.calls[0];
+      await handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'personal', id: 'conv-1' },
+          replyToId: 'card-1',
+          value: { action: { data: {
+            action: 'switch', conversationId: 'legion-2', key: stateKey,
+          } } },
+        },
+      } as never);
+      await vi.waitFor(() => expect(updates).toHaveLength(1));
+      expect(JSON.stringify(updates[0].activity)).toContain('Could not switch conversation.');
+      expect(connector['state']!.legionConversations[stateKey]).toBe('legion-1');
+      expect(connector['state']!.legionConversationTargets['legion-1']).toBe(stateKey);
+      expect(connector['state']!.legionConversationTargets['legion-2']).toBe('app:bob');
+    } finally {
+      await connector.stop();
+    }
+  });
+
   it('pages the picker without changing state', async () => {
     const { app, deps, updates } = setup();
     const factory = vi.fn<TeamsAppFactory>(() => app);

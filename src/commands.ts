@@ -305,7 +305,9 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
         usageText = `Usage: unavailable (${error instanceof Error ? error.message : String(error)})`;
       }
 
-      const title = meta?.title ?? fallbackTitle;
+      // listConversations falls back to the id when no resolved/shared/title exists;
+      // the get_conversation title should win over that placeholder.
+      const title = meta && meta.title !== conversationId ? meta.title : fallbackTitle;
       const counts = meta
         ? `Messages: ${meta.messageCount} total, ${activeMessages} active`
         : `Messages: ${activeMessages} active`;

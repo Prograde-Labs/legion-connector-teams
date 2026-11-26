@@ -561,6 +561,37 @@ describe('commands', () => {
     expect(sent[0]).toContain('Cache: 100 read / 50 write · Cost: $0.1234');
   });
 
+  it('prefers the get_conversation title when the list meta title is only the id', async () => {
+    const { deps: d, sent } = deps('/context');
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return {
+          result: { status: 'success', data: { title: 'Actual title', status: 'active', messages: [] } },
+          conversationId: 'c',
+        };
+      }
+      if (tool === 'list_conversations') {
+        return {
+          result: {
+            status: 'success',
+            data: {
+              conversations: [{
+                id: 'legion-1', messageCount: 1,
+                updatedAt: '2026-11-25T00:00:00.000Z', status: 'active',
+              }],
+            },
+          },
+          conversationId: 'c',
+        };
+      }
+      return { result: { status: 'success', data: {} }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toContain('📊 Context — Actual title');
+    expect(sent[0]).not.toContain('📊 Context — legion-1');
+  });
+
   it('degrades to active count when the conversation meta is unavailable', async () => {
     const { deps: d, sent } = deps('/context');
     d.state.legionConversations['app:alice'] = 'legion-1';

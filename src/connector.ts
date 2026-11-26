@@ -446,8 +446,27 @@ export class TeamsConnector implements Connector {
           } else if (entry.id === state.legionConversations[stateKey]) {
             card = switchedCard(entry, true);
           } else {
+            const previous = state.legionConversations[stateKey];
+            const previousOwner = state.legionConversationTargets[entry.id];
+            const previousOwnedByState =
+              previous !== undefined && state.legionConversationTargets[previous] === stateKey;
             bindConversation(state, stateKey, entry.id);
-            await store.save(state);
+            try {
+              await store.save(state);
+            } catch (error) {
+              if (previous === undefined) {
+                delete state.legionConversations[stateKey];
+              } else {
+                state.legionConversations[stateKey] = previous;
+                if (previousOwnedByState) state.legionConversationTargets[previous] = stateKey;
+              }
+              if (previousOwner === undefined) {
+                delete state.legionConversationTargets[entry.id];
+              } else {
+                state.legionConversationTargets[entry.id] = previousOwner;
+              }
+              throw error;
+            }
             card = switchedCard(entry);
           }
         }
