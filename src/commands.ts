@@ -146,10 +146,14 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
       await deps.send(
         'Commands:\n' +
         '/new — start a new conversation\n' +
+        '/switch — list and switch to an existing conversation\n' +
+        '/switch <conversation-id> — switch directly\n' +
+        '/compact [instruction] — summarize/compact this conversation\n' +
+        '/context — show usage and context details\n' +
         '/pair <code> <participant-id> — pair a pending Teams identity\n' +
         '/whoami — show your identity\n' +
-        'In a group chat, /new and /whoami act on the group; /pair runs as you.\n' +
-        '/help — this message',
+        '/help — this message\n' +
+        'In a group chat, /new, /switch, /compact, and /context act on the group; /pair runs as you.',
       );
       return true;
     }

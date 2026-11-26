@@ -233,10 +233,16 @@ describe('commands', () => {
     expect(d.state.pendingPairs[code]).toBeDefined();
   });
 
-  it('mentions group behavior in /help', async () => {
+  it('lists the new commands and group scoping in /help', async () => {
     const { deps: d, sent } = deps('/help');
     await expect(handleCommand(d)).resolves.toBe(true);
-    expect(sent[0]).toContain('In a group chat, /new and /whoami act on the group; /pair runs as you.');
+    expect(sent[0]).toContain('/switch — list and switch to an existing conversation');
+    expect(sent[0]).toContain('/switch <conversation-id> — switch directly');
+    expect(sent[0]).toContain('/compact [instruction] — summarize/compact this conversation');
+    expect(sent[0]).toContain('/context — show usage and context details');
+    expect(sent[0]).toContain(
+      'In a group chat, /new, /switch, /compact, and /context act on the group; /pair runs as you.',
+    );
   });
 
   it('rejects /pair from an unregistered human in a group', async () => {
