@@ -2,6 +2,12 @@
 import type { ConnectorContext } from '@legion-collective/core';
 import { isAwaitingApproval } from './approvals.js';
 import { validatePendingPair } from './pairing.js';
+import {
+  bindConversation,
+  conversationCard,
+  conversationErrorText,
+  listConversations,
+} from './conversations.js';
 import type { ResolvedOptions } from './options.js';
 import type { TeamsState } from './state.js';
 import type { IAdaptiveCard } from '@microsoft/teams.cards';
@@ -118,6 +124,32 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
         '/help — this message',
       );
       return true;
+    }
+    case '/switch': {
+      const currentId = deps.state.legionConversations[key];
+      try {
+        const entries = await listConversations(deps.ctx, deps.participantId);
+        const target = rest[0];
+        if (!target) {
+          await deps.sendCard(conversationCard(entries, currentId, 0, key));
+          return true;
+        }
+        const entry = entries.find((candidate) => candidate.id === target);
+        if (!entry) {
+          await deps.send('Conversation not found. Use /switch to list active conversations.');
+          return true;
+        }
+        if (entry.id === currentId) {
+          await deps.send(`Already on ${entry.title}.`);
+          return true;
+        }
+        bindConversation(deps.state, key, entry.id);
+        await deps.send(`Switched to ${entry.title} (${entry.messageCount} messages).`);
+        return true;
+      } catch (error) {
+        await deps.send(`Unable to list conversations: ${conversationErrorText(error)}`);
+        return true;
+      }
     }
     default:
       return false;

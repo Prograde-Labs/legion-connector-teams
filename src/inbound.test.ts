@@ -237,6 +237,17 @@ describe('handleInbound', () => {
     expect(s.streamTool).not.toHaveBeenCalled();
   });
 
+  it('sends the conversation picker card for /switch', async () => {
+    const s = setup([alice]);
+    const send = vi.fn(async () => undefined);
+    await handleInbound(inboundDeps(s), { activity: activity('/switch'), send });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [expect.objectContaining({
+        contentType: 'application/vnd.microsoft.card.adaptive',
+      })],
+    }));
+  });
+
   it('sends a typing indicator while handling a command', async () => {
     const s = setup([alice]);
     const send = vi.fn(async () => undefined);
