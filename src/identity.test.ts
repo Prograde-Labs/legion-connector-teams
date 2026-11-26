@@ -194,3 +194,106 @@ describe('group identity', () => {
     expect(found?.id).toBe('team-eng');
   });
 });
+
+import { resolveChatParticipant } from './identity.js';
+
+const participant = (id: string, connector: string, externalId: string, status = 'active') => ({
+  id, name: id, type: 'user', status,
+  identities: [{ connector, externalId }],
+});
+
+function collectiveOf(participants: Array<ReturnType<typeof participant>>): CollectiveLike {
+  return {
+    list: () => participants,
+    get: (id: string) => participants.find((candidate) => candidate.id === id),
+    findByIdentity: (connector: string, externalId: string) =>
+      participants.find((candidate) =>
+        candidate.identities.some((identity) =>
+          identity.connector === connector && identity.externalId === externalId)),
+  } as unknown as CollectiveLike;
+}
+
+describe('resolveChatParticipant', () => {
+  const alice = participant('alice', 'teams', 'aad-1');
+  const group = participant('team-eng', 'teams-group', '19:g@thread.v2');
+  const operator = participant('operator', 'teams', 'aad-op');
+
+  it('resolves a registered personal user', () => {
+    expect(resolveChatParticipant({
+      collective: collectiveOf([alice, operator]),
+      appId: 'app',
+      aadObjectId: 'aad-1',
+      isGroup: false,
+      options: resolveOptions({ stateDir: '/tmp/x' }),
+    })).toEqual({ participantId: 'alice', key: 'app:alice' });
+  });
+
+  it('resolves a personal fallback with the AAD suffix', () => {
+    expect(resolveChatParticipant({
+      collective: collectiveOf([alice, operator]),
+      appId: 'app',
+      aadObjectId: 'aad-9',
+      isGroup: false,
+      options: resolveOptions({
+        stateDir: '/tmp/x',
+        unknownUserPolicy: 'fallback',
+        fallbackUserId: 'operator',
+      }),
+    })).toEqual({ participantId: 'operator', key: 'app:operator:aad-9' });
+  });
+
+  it('resolves a registered group', () => {
+    expect(resolveChatParticipant({
+      collective: collectiveOf([alice, group]),
+      appId: 'app',
+      conversationId: '19:g@thread.v2',
+      isGroup: true,
+      options: resolveOptions({ stateDir: '/tmp/x' }),
+    })).toEqual({ participantId: 'team-eng', key: 'app:team-eng:19:g@thread.v2' });
+  });
+
+  it('resolves a group fallback', () => {
+    expect(resolveChatParticipant({
+      collective: collectiveOf([alice, operator]),
+      appId: 'app',
+      conversationId: '19:unknown@thread.v2',
+      isGroup: true,
+      options: resolveOptions({
+        stateDir: '/tmp/x',
+        unknownUserPolicy: 'fallback',
+        fallbackUserId: 'operator',
+      }),
+    })).toEqual({ participantId: 'operator', key: 'app:operator:19:unknown@thread.v2' });
+  });
+
+  it('returns undefined without a fallback', () => {
+    expect(resolveChatParticipant({
+      collective: collectiveOf([alice]),
+      appId: 'app',
+      aadObjectId: 'aad-9',
+      isGroup: false,
+      options: resolveOptions({ stateDir: '/tmp/x' }),
+    })).toBeUndefined();
+    expect(resolveChatParticipant({
+      collective: collectiveOf([alice]),
+      appId: 'app',
+      conversationId: '19:unknown@thread.v2',
+      isGroup: true,
+      options: resolveOptions({ stateDir: '/tmp/x' }),
+    })).toBeUndefined();
+  });
+
+  it('rejects a retired fallback participant', () => {
+    expect(resolveChatParticipant({
+      collective: collectiveOf([alice, participant('operator', 'teams', 'aad-op', 'retired')]),
+      appId: 'app',
+      aadObjectId: 'aad-9',
+      isGroup: false,
+      options: resolveOptions({
+        stateDir: '/tmp/x',
+        unknownUserPolicy: 'fallback',
+        fallbackUserId: 'operator',
+      }),
+    })).toBeUndefined();
+  });
+});
