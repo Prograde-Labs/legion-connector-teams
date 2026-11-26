@@ -41,6 +41,8 @@ The connector accepts personal chats and group chats, and checks that incoming m
 
 Use `scripts/provision-teams-bot.mjs` for each participant or `scripts/provision-all.mjs` for a selection. Existing bot registrations are reused; new identities are added through Legion's `pair` API and discovered on the next rescan (60 seconds by default). `--force` registers a replacement and updates the participant file; restart Legion or reconcile its in-memory collective before relying on the replacement, because the old identity remains active until then. See the [README](../README.md#provisioning) for arguments, credentials, and the dry-run warning. Manually install every bot in Teams; registration alone does not install it for users.
 
+The generated Teams app manifest is version `1.1.0` and advertises the `/new`, `/switch`, `/compact`, `/context`, `/whoami`, `/pair`, and `/help` commands. Updating an existing install requires uploading the new package (or updating the app) in Teams; the command list is not picked up from a bot restart alone.
+
 ## Operations and troubleshooting
 
 - Watch for `[legion] external connector 'teams' started` in Legion logs. This only confirms connector startup, not that each bot is usable.
