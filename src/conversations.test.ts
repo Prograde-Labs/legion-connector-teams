@@ -141,3 +141,110 @@ describe('bindConversation', () => {
     expect(state.legionConversationTargets['shared']).toBe('app:bob');
   });
 });
+
+import type { IAdaptiveCard } from '@microsoft/teams.cards';
+import {
+  CONVERSATION_PAGE_SIZE,
+  conversationCard,
+  conversationErrorCard,
+  switchedCard,
+  type ConversationEntry,
+} from './conversations.js';
+
+function entry(id: string, title: string, updatedAt = '2026-11-25T00:00:00.000Z'): ConversationEntry {
+  return { id, title, messageCount: 3, updatedAt, status: 'active' };
+}
+
+describe('conversationCard', () => {
+  it('shows five conversations and a More button', () => {
+    const entries = Array.from({ length: 7 }, (_, index) => entry(`c${index}`, `Conversation ${index}`));
+    const card = conversationCard(entries, 'c1', 0, 'app:alice') as unknown as {
+      body: Array<{ text?: string }>;
+      actions: Array<{ title: string; data: Record<string, unknown> }>;
+    };
+    expect(CONVERSATION_PAGE_SIZE).toBe(5);
+    expect(card.actions).toHaveLength(6);
+    expect(card.actions.slice(0, 5).map((action) => action.data.conversationId))
+      .toEqual(['c0', 'c1', 'c2', 'c3', 'c4']);
+    expect(card.actions[5]).toEqual({
+      type: 'Action.Execute',
+      title: 'More…',
+      data: { action: 'switch', offset: 5, key: 'app:alice' },
+    });
+    expect(card.body.some((block) => block.text === 'Showing 1–5 of 7')).toBe(true);
+    expect(JSON.stringify(card)).toContain('· current');
+  });
+
+  it('shows the final page without More', () => {
+    const entries = Array.from({ length: 7 }, (_, index) => entry(`c${index}`, `Conversation ${index}`));
+    const card = conversationCard(entries, undefined, 5, 'app:alice') as unknown as {
+      body: Array<{ text?: string }>;
+      actions: unknown[];
+    };
+    expect(card.actions).toHaveLength(2);
+    expect(card.body.some((block) => block.text === 'Showing 6–7 of 7')).toBe(true);
+  });
+
+  it('marks a current conversation outside the list', () => {
+    const card = conversationCard([entry('c0', 'Only')], 'gone', 0, 'app:alice') as unknown as {
+      body: Array<{ text?: string }>;
+    };
+    expect(card.body.some((block) => block.text === 'Current: gone (not in the active list)'))
+      .toBe(true);
+  });
+
+  it('renders an empty state with no actions', () => {
+    const card = conversationCard([], undefined, 0, 'app:alice') as unknown as {
+      body: Array<{ text?: string }>;
+      actions?: unknown[];
+    };
+    expect(card.body.some((block) => block.text === '🔀 Switch conversation')).toBe(true);
+    expect(card.body.some((block) => block.text === 'No conversations yet. Send a message to start one.'))
+      .toBe(true);
+    expect(card.actions).toBeUndefined();
+  });
+
+  it('truncates long titles and stays under the default card limit', () => {
+    const entries = Array.from({ length: 5 }, (_, index) =>
+      entry(`c${index}`, `${index}`.padEnd(80, 'x')));
+    const card = conversationCard(entries, undefined, 0, 'app:alice');
+    const serialized = JSON.stringify(card);
+    expect(serialized.length).toBeLessThan(28000);
+    expect(serialized).toContain('…');
+    expect(serialized).not.toContain('x'.repeat(60));
+  });
+});
+
+describe('switchedCard', () => {
+  it('shows the new binding', () => {
+    const card = switchedCard(entry('c1', 'Project X')) as unknown as {
+      body: Array<{ text?: string }>;
+    };
+    expect(card.body.some((block) => block.text === '✅ Switched conversation')).toBe(true);
+    expect(JSON.stringify(card)).toContain('Project X');
+    expect(JSON.stringify(card)).toContain('Future messages in this chat go to this conversation.');
+  });
+
+  it('shows the already-current state', () => {
+    const card = switchedCard(entry('c1', 'Project X'), true) as unknown as {
+      body: Array<{ text?: string }>;
+    };
+    expect(card.body.some((block) => block.text === '✅ Already on this conversation')).toBe(true);
+  });
+});
+
+describe('conversationErrorCard', () => {
+  it('shows a warning with no actions', () => {
+    const card = conversationErrorCard('Conversation not found.') as unknown as {
+      body: Array<{ text?: string }>;
+      actions?: unknown[];
+    };
+    expect(card.body[0]?.text).toBe('⚠️ Conversation not found.');
+    expect(card.actions).toBeUndefined();
+  });
+});
+
+it('keeps the card typed as IAdaptiveCard', () => {
+  const card: IAdaptiveCard = conversationCard([], undefined, 0, 'app:alice');
+  expect(card.type).toBe('AdaptiveCard');
+});
