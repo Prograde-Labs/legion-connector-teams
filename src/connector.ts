@@ -11,9 +11,21 @@ import { MessageActivityInput } from '@microsoft/teams.api';
 import type { IAdaptiveCard } from '@microsoft/teams.cards';
 import { handleApprovalAction, sendResumed, type ResumedItem } from './approvals.js';
 import { BotPool, defaultAppFactory, type CardInvokeResponse, type TeamsAppFactory } from './bot-pool.js';
+import {
+  bindConversation,
+  conversationCard,
+  conversationErrorCard,
+  listConversations,
+  switchedCard,
+} from './conversations.js';
 import { buildDirectory, type BotEntry } from './directory.js';
 import { describeError } from './errors.js';
-import { findGroupActor, findTeamsActor, readTeamsId } from './identity.js';
+import {
+  findGroupActor,
+  findTeamsActor,
+  readTeamsId,
+  resolveChatParticipant,
+} from './identity.js';
 import { handleInbound, isBotTenant, tenantMismatchText, type TeamsContextLike } from './inbound.js';
 import { deliverMessage } from './outbound.js';
 import { buildResultCard } from './result-card.js';
@@ -39,6 +51,9 @@ const ACK_SETTLE_MS = 300;
 
 /** Longest tool name accepted from an untrusted card action payload. */
 const MAX_TOOL_NAME = 128;
+
+/** Longest conversation id or key accepted from an untrusted card payload. */
+const MAX_CONVERSATION_VALUE = 256;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -115,13 +130,16 @@ export class TeamsConnector implements Connector {
     await this.inFlight;
   }
 
+  private queueKeyFor(bot: BotEntry, activity: TeamsContextLike['activity']): string {
+    return activity.conversation?.conversationType === 'groupChat'
+      ? `${bot.appId}:${activity.conversation?.id || 'unknown'}`
+      : `${bot.appId}:${readTeamsId(activity.from) || 'unknown'}`;
+  }
+
   private async onMessage(bot: BotEntry, context: TeamsContextLike): Promise<void> {
     const { ctx, state, store } = this;
     if (!ctx || !state || !store) return;
-    const activity = context.activity;
-    const key = activity.conversation?.conversationType === 'groupChat'
-      ? `${bot.appId}:${activity.conversation?.id || 'unknown'}`
-      : `${bot.appId}:${readTeamsId(activity.from) || 'unknown'}`;
+    const key = this.queueKeyFor(bot, context.activity);
     await this.queue.run(key, () => handleInbound(
       {
         bot,
@@ -347,10 +365,116 @@ export class TeamsConnector implements Connector {
   }
 
   private async onConversationAction(
-    _bot: BotEntry,
-    _context: TeamsContextLike,
+    bot: BotEntry,
+    context: TeamsContextLike,
   ): Promise<CardInvokeResponse> {
-    return messageResponse('Switching is not available.');
+    if (!this.ctx || !this.state || !this.store || !this.pool) {
+      return messageResponse('This bot is not available.');
+    }
+    if (!isBotTenant(bot, context.activity)) return messageResponse(tenantMismatchText);
+    const conversationType = context.activity.conversation?.conversationType;
+    if (conversationType !== 'personal' && !(conversationType === 'groupChat' && this.options.groupChats)) {
+      return messageResponse(this.options.groupChats
+        ? 'Only personal chats and group chats are supported.'
+        : 'Only personal chats are supported.');
+    }
+
+    const isGroup = conversationType === 'groupChat';
+    const teamsConversationId = context.activity.conversation?.id?.trim();
+    const aadObjectId = readTeamsId(context.activity.from);
+    const participant = resolveChatParticipant({
+      collective: this.deps.collective,
+      appId: bot.appId,
+      aadObjectId,
+      conversationId: teamsConversationId,
+      isGroup,
+      options: this.options,
+    });
+    if (!participant) {
+      return messageResponse(isGroup ? 'This group is not registered.' : 'Not registered.');
+    }
+
+    const data = (context.activity.value?.action?.data ?? {}) as {
+      action?: unknown;
+      conversationId?: unknown;
+      offset?: unknown;
+      key?: unknown;
+    };
+    if (data.action !== 'switch') return messageResponse('Invalid switch payload.');
+
+    const payloadKey = typeof data.key === 'string' ? data.key.trim() : '';
+    if (payloadKey.length > MAX_CONVERSATION_VALUE) return messageResponse('Invalid switch payload.');
+    if (payloadKey && payloadKey !== participant.key) return messageResponse('Invalid switch payload.');
+    const stateKey = payloadKey || participant.key;
+
+    const rawConversationId =
+      typeof data.conversationId === 'string' ? data.conversationId.trim() : '';
+    if (rawConversationId.length > MAX_CONVERSATION_VALUE) {
+      return messageResponse('Invalid switch payload.');
+    }
+    const conversationId = rawConversationId || undefined;
+
+    const rawOffset = data.offset;
+    if (rawOffset !== undefined && (typeof rawOffset !== 'number' || !Number.isFinite(rawOffset))) {
+      return messageResponse('Invalid switch payload.');
+    }
+    const offset = rawOffset === undefined ? undefined : Math.max(0, Math.floor(rawOffset));
+    if (conversationId === undefined && offset === undefined) {
+      return messageResponse('Invalid switch payload.');
+    }
+    if (!teamsConversationId) return messageResponse('Missing conversation.');
+
+    const app = this.pool.getByAppId(bot.appId);
+    if (!app) return messageResponse('Teams app is not running.');
+
+    const cardActivityId = context.activity.replyToId;
+    const ctx = this.ctx;
+    const state = this.state;
+    const store = this.store;
+    const queueKey = this.queueKeyFor(bot, context.activity);
+
+    void this.queue.run(queueKey, async () => {
+      let card: IAdaptiveCard;
+      try {
+        const entries = await listConversations(ctx, participant.participantId);
+        if (conversationId === undefined) {
+          card = conversationCard(entries, state.legionConversations[stateKey], offset ?? 0, stateKey);
+        } else {
+          const entry = entries.find((candidate) => candidate.id === conversationId);
+          if (!entry) {
+            card = conversationErrorCard('Conversation not found.');
+          } else if (entry.id === state.legionConversations[stateKey]) {
+            card = switchedCard(entry, true);
+          } else {
+            bindConversation(state, stateKey, entry.id);
+            await store.save(state);
+            card = switchedCard(entry);
+          }
+        }
+      } catch (error) {
+        console.error('Teams switch action failed', describeError(error));
+        card = conversationErrorCard('Could not switch conversation.');
+      }
+
+      await delay(ACK_SETTLE_MS);
+      try {
+        const activity = new MessageActivityInput().addCard('adaptive', card);
+        if (cardActivityId) {
+          try {
+            await app.api.conversations.updateActivity(teamsConversationId, cardActivityId, activity);
+          } catch (error) {
+            console.error('Teams card update failed', describeError(error));
+            await app.send(teamsConversationId, activity);
+          }
+        } else {
+          await app.send(teamsConversationId, activity);
+        }
+      } catch (error) {
+        console.error('Teams switch card delivery failed', describeError(error));
+      }
+    });
+
+    return cardResponse(runningCard('switch'));
   }
 
   async deliver(message: {

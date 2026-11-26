@@ -670,6 +670,366 @@ describe('TeamsConnector', () => {
     });
   });
 
+  it('switches the chat to a chosen conversation and updates the card', async () => {
+    const { app, deps, updates } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [
+        { id: 'legion-1', resolvedTitle: 'First', messageCount: 4,
+          updatedAt: '2026-11-24T00:00:00.000Z', status: 'active' },
+        { id: 'legion-2', resolvedTitle: 'Second', messageCount: 2,
+          updatedAt: '2026-11-25T00:00:00.000Z', status: 'active' },
+      ] } },
+      conversationId: 'c',
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      connector['state']!.legionConversations['app:alice'] = 'legion-1';
+      connector['state']!.legionConversationTargets['legion-1'] = 'app:alice';
+      const [entry, handlers] = factory.mock.calls[0];
+      const response = await handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'personal', id: 'conv-1' },
+          replyToId: 'card-1',
+          value: { action: { data: {
+            action: 'switch', conversationId: 'legion-2', key: 'app:alice',
+          } } },
+        },
+      } as never);
+      expect(response).toMatchObject({
+        status: 200,
+        body: { statusCode: 200, type: 'application/vnd.microsoft.card.adaptive' },
+      });
+      expect(JSON.stringify(response.body)).toContain('Running switch');
+      await vi.waitFor(() => expect(updates).toHaveLength(1));
+      expect(updates[0]).toMatchObject({ conversationId: 'conv-1', activityId: 'card-1' });
+      expect(JSON.stringify(updates[0].activity)).toContain('Switched conversation');
+      expect(connector['state']!.legionConversations['app:alice']).toBe('legion-2');
+      expect(connector['state']!.legionConversationTargets['legion-2']).toBe('app:alice');
+      expect(connector['state']!.legionConversationTargets['legion-1']).toBeUndefined();
+    } finally {
+      await connector.stop();
+    }
+  });
+
+  it('pages the picker without changing state', async () => {
+    const { app, deps, updates } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-page-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const conversations = Array.from({ length: 7 }, (_, index) => ({
+      id: `legion-${index}`,
+      resolvedTitle: `Conversation ${index}`,
+      messageCount: 1,
+      updatedAt: `2026-11-${String(20 + index).padStart(2, '0')}T00:00:00.000Z`,
+      status: 'active',
+    }));
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations } },
+      conversationId: 'c',
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      connector['state']!.legionConversations['app:alice'] = 'legion-0';
+      const [entry, handlers] = factory.mock.calls[0];
+      await handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'personal', id: 'conv-1' },
+          replyToId: 'card-1',
+          value: { action: { data: { action: 'switch', offset: 5, key: 'app:alice' } } },
+        },
+      } as never);
+      await vi.waitFor(() => expect(updates).toHaveLength(1));
+      expect(JSON.stringify(updates[0].activity)).toContain('Showing 6–7 of 7');
+      expect(connector['state']!.legionConversations['app:alice']).toBe('legion-0');
+    } finally {
+      await connector.stop();
+    }
+  });
+
+  it('shows an error card for a conversation outside the active list', async () => {
+    const { app, deps, updates } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-missing-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [] } },
+      conversationId: 'c',
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      await handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'personal', id: 'conv-1' },
+          replyToId: 'card-1',
+          value: { action: { data: {
+            action: 'switch', conversationId: 'legion-x', key: 'app:alice',
+          } } },
+        },
+      } as never);
+      await vi.waitFor(() => expect(updates).toHaveLength(1));
+      expect(JSON.stringify(updates[0].activity)).toContain('Conversation not found.');
+    } finally {
+      await connector.stop();
+    }
+  });
+
+  it('rejects an invalid switch payload without listing conversations', async () => {
+    const { app, deps, updates } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-invalid-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({ result: { status: 'success' }, conversationId: 'c' }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      const invoke = (data: Record<string, unknown>) => handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'personal', id: 'conv-1' },
+          replyToId: 'card-1',
+          value: { action: { data } },
+        },
+      } as never);
+      expect(await invoke({ action: 'switch' })).toHaveProperty('body.value', 'Invalid switch payload.');
+      expect(await invoke({ action: 'switch', key: 'app:bob', conversationId: 'c1' }))
+        .toHaveProperty('body.value', 'Invalid switch payload.');
+      expect(await invoke({ action: 'switch', conversationId: 'x'.repeat(257) }))
+        .toHaveProperty('body.value', 'Invalid switch payload.');
+      expect(await invoke({ action: 'switch', offset: '5' }))
+        .toHaveProperty('body.value', 'Invalid switch payload.');
+      expect(callTool).not.toHaveBeenCalled();
+      expect(updates).toHaveLength(0);
+    } finally {
+      await connector.stop();
+    }
+  });
+
+  it('rejects tenant and conversation-type mismatches for switch', async () => {
+    const { app, deps, updates } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-scope-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({ result: { status: 'success' }, conversationId: 'c' }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      const invoke = (tenant: string, conversationType: string) => handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: tenant } },
+          conversation: { conversationType, id: 'conv-1' },
+          value: { action: { data: { action: 'switch', offset: 0 } } },
+        },
+      } as never);
+      expect(await invoke('other', 'personal'))
+        .toHaveProperty('body.value', 'This bot is not available in your tenant.');
+      expect(await invoke('t', 'channel'))
+        .toHaveProperty('body.value', 'Only personal chats and group chats are supported.');
+      expect(callTool).not.toHaveBeenCalled();
+      expect(updates).toHaveLength(0);
+    } finally {
+      await connector.stop();
+    }
+  });
+
+  it('rejects unregistered personal and group clickers', async () => {
+    const { app, deps } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-unknown-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({ result: { status: 'success' }, conversationId: 'c' }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      const invoke = (conversationType: string, id: string) => handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-9' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType, id },
+          value: { action: { data: { action: 'switch', offset: 0 } } },
+        },
+      } as never);
+      expect(await invoke('personal', 'conv-1')).toHaveProperty('body.value', 'Not registered.');
+      expect(await invoke('groupChat', '19:unknown@thread.v2'))
+        .toHaveProperty('body.value', 'This group is not registered.');
+      expect(callTool).not.toHaveBeenCalled();
+    } finally {
+      await connector.stop();
+    }
+  });
+
+  it('switches a group chat under the group key', async () => {
+    const { app, deps, updates } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-group-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [{
+        id: 'legion-group-2', resolvedTitle: 'Group thread', messageCount: 2,
+        updatedAt: '2026-11-25T00:00:00.000Z', status: 'active',
+      }] } },
+      conversationId: 'c',
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      connector['state']!.legionConversations['app:team-eng:19:g@thread.v2'] = 'legion-group-1';
+      const [entry, handlers] = factory.mock.calls[0];
+      await handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'groupChat', id: '19:g@thread.v2' },
+          replyToId: 'card-1',
+          value: { action: { data: {
+            action: 'switch', conversationId: 'legion-group-2',
+            key: 'app:team-eng:19:g@thread.v2',
+          } } },
+        },
+      } as never);
+      await vi.waitFor(() => expect(updates).toHaveLength(1));
+      expect(callTool).toHaveBeenCalledWith('team-eng', 'list_conversations', expect.anything());
+      expect(connector['state']!.legionConversations['app:team-eng:19:g@thread.v2'])
+        .toBe('legion-group-2');
+    } finally {
+      await connector.stop();
+    }
+  });
+
+  it('uses the fallback participant for an unknown personal clicker', async () => {
+    const { app, deps, participants, updates } = setup();
+    participants.push({
+      id: 'operator', name: 'Operator', type: 'user', tools: {}, status: 'active',
+      identities: [{ connector: 'teams', externalId: 'aad-op' }],
+    });
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-fallback-'));
+    const connector = new TeamsConnector({
+      stateDir: dir,
+      transport: 'socket',
+      unknownUserPolicy: 'fallback',
+      fallbackUserId: 'operator',
+    }, deps, factory);
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [{
+        id: 'legion-op', resolvedTitle: 'Fallback thread', messageCount: 1,
+        updatedAt: '2026-11-25T00:00:00.000Z', status: 'active',
+      }] } },
+      conversationId: 'c',
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      await handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-9' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'personal', id: 'conv-1' },
+          replyToId: 'card-1',
+          value: { action: { data: {
+            action: 'switch', conversationId: 'legion-op', key: 'app:operator:aad-9',
+          } } },
+        },
+      } as never);
+      await vi.waitFor(() => expect(updates).toHaveLength(1));
+      expect(callTool).toHaveBeenCalledWith('operator', 'list_conversations', expect.anything());
+      expect(connector['state']!.legionConversations['app:operator:aad-9']).toBe('legion-op');
+    } finally {
+      await connector.stop();
+    }
+  });
+
+  it('sends a follow-up card when replyToId is absent', async () => {
+    const { app, deps, sent } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-followup-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [{
+        id: 'legion-2', resolvedTitle: 'Second', messageCount: 1,
+        updatedAt: '2026-11-25T00:00:00.000Z', status: 'active',
+      }] } },
+      conversationId: 'c',
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      const [entry, handlers] = factory.mock.calls[0];
+      await handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'personal', id: 'conv-1' },
+          value: { action: { data: {
+            action: 'switch', conversationId: 'legion-2', key: 'app:alice',
+          } } },
+        },
+      } as never);
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0].conversationId).toBe('conv-1');
+      expect(JSON.stringify(sent[0].activity)).toContain('Switched conversation');
+    } finally {
+      await connector.stop();
+    }
+  });
+
+  it('serializes a switch behind an in-flight turn for the same chat', async () => {
+    const { app, deps, updates } = setup();
+    const factory = vi.fn<TeamsAppFactory>(() => app);
+    const dir = await mkdtemp(join(tmpdir(), 'teams-switch-queue-'));
+    const connector = new TeamsConnector({ stateDir: dir, transport: 'socket' }, deps, factory);
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [{
+        id: 'legion-2', resolvedTitle: 'Second', messageCount: 1,
+        updatedAt: '2026-11-25T00:00:00.000Z', status: 'active',
+      }] } },
+      conversationId: 'c',
+    }));
+    await connector.start({ callTool } as never);
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const turn = connector['queue'].run('app:aad-1', async () => { await gate; });
+      const [entry, handlers] = factory.mock.calls[0];
+      await handlers.onConversationAction(entry, {
+        send: vi.fn(),
+        activity: {
+          from: { aadObjectId: 'aad-1' },
+          channelData: { tenant: { id: 't' } },
+          conversation: { conversationType: 'personal', id: 'conv-1' },
+          replyToId: 'card-1',
+          value: { action: { data: {
+            action: 'switch', conversationId: 'legion-2', key: 'app:alice',
+          } } },
+        },
+      } as never);
+      expect(updates).toHaveLength(0);
+      release();
+      await turn;
+      await vi.waitFor(() => expect(updates).toHaveLength(1));
+    } finally {
+      await connector.stop();
+    }
+  });
+
 });
 
 it('exposes only the configured Teams tools after start', async () => {
