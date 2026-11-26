@@ -34,6 +34,7 @@ export interface AppHandlers {
   onConversationUpdate: (entry: BotEntry, ctx: never) => Promise<void>;
   onApproval: (entry: BotEntry, ctx: never, decision: 'approve' | 'reject') => Promise<CardInvokeResponse>;
   onToolAction: (entry: BotEntry, ctx: never) => Promise<CardInvokeResponse>;
+  onConversationAction: (entry: BotEntry, ctx: never) => Promise<CardInvokeResponse>;
 }
 
 export interface CardInvokeResponse {
@@ -118,6 +119,7 @@ export function defaultAppFactory(
   app.on('card.action.approve', (ctx) => handlers.onApproval(entry, ctx as never, 'approve'));
   app.on('card.action.reject', (ctx) => handlers.onApproval(entry, ctx as never, 'reject'));
   app.on('card.action.tool', (ctx) => handlers.onToolAction(entry, ctx as never));
+  app.on('card.action.switch', (ctx) => handlers.onConversationAction(entry, ctx as never));
 
   return app as unknown as TeamsAppLike;
 }

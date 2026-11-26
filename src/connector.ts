@@ -94,6 +94,7 @@ export class TeamsConnector implements Connector {
       onConversationUpdate: (bot, context) => this.onInstall(bot, context),
       onApproval: (bot, context, decision) => this.onApproval(bot, context, decision),
       onToolAction: (bot, context) => this.onToolAction(bot, context),
+      onConversationAction: (bot, context) => this.onConversationAction(bot, context),
     });
     await this.pool.start(directory.bots);
 
@@ -343,6 +344,13 @@ export class TeamsConnector implements Connector {
     })();
 
     return cardResponse(runningCard(tool));
+  }
+
+  private async onConversationAction(
+    _bot: BotEntry,
+    _context: TeamsContextLike,
+  ): Promise<CardInvokeResponse> {
+    return messageResponse('Switching is not available.');
   }
 
   async deliver(message: {
