@@ -373,4 +373,132 @@ describe('commands', () => {
     expect(d.state.legionConversationTargets['legion-2']).toBe('app:operator:aad-9');
     expect(sent[0]).toContain('Switched to Second');
   });
+
+  it('reports missing compaction configuration without calling a tool', async () => {
+    const { deps: d, sent, callTool } = deps('/compact');
+    await handleCommand(d);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(sent[0]).toBe(
+      'Compaction is not configured. Set the "compaction.agentId" connector option.',
+    );
+  });
+
+  it('reports no conversation', async () => {
+    const { deps: d, sent } = deps('/compact', {
+      options: resolveOptions({ stateDir: '/tmp/x', compaction: { agentId: 'summarizer' } }),
+    });
+    await handleCommand(d);
+    expect(sent[0]).toBe('Nothing to compact — no conversation yet.');
+  });
+
+  it('compacts the active chain and reports the summary', async () => {
+    const { deps: d, sent } = deps('/compact be brief', {
+      options: resolveOptions({
+        stateDir: '/tmp/x',
+        compaction: { agentId: 'summarizer', instruction: 'Default instruction.' },
+      }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    let getCalls = 0;
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        getCalls += 1;
+        return {
+          result: {
+            status: 'success',
+            data: {
+              messages: getCalls === 1
+                ? [{ id: 'm1', content: 'one' }, { id: 'm2', content: 'two' }]
+                : [{ id: 's1', content: 'Summary text' }],
+            },
+          },
+          conversationId: 'c',
+        };
+      }
+      return {
+        result: { status: 'success', data: { summaryMessageId: 's1' } },
+        conversationId: 'c',
+      };
+    });
+    const stopTyping = vi.fn();
+    await handleCommand({
+      ...d,
+      ctx: { callTool } as unknown as ConnectorContext,
+      stopTyping,
+    });
+    expect(callTool).toHaveBeenCalledWith('alice', 'compact_conversation', {
+      conversationId: 'legion-1',
+      messageIds: ['m1', 'm2'],
+      agentId: 'summarizer',
+      instruction: 'be brief',
+    });
+    expect(stopTyping).toHaveBeenCalledOnce();
+    expect(sent[0]).toBe('🗜 Compacted 2 messages into a summary:\n\nSummary text');
+  });
+
+  it('uses the default instruction for a bare /compact', async () => {
+    const { deps: d } = deps('/compact', {
+      options: resolveOptions({
+        stateDir: '/tmp/x',
+        compaction: { agentId: 'summarizer', instruction: 'Default instruction.' },
+      }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return { result: { status: 'success', data: { messages: [{ id: 'm1' }] } }, conversationId: 'c' };
+      }
+      return { result: { status: 'success', data: { summaryMessageId: 's1' } }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(callTool).toHaveBeenCalledWith(
+      'alice',
+      'compact_conversation',
+      expect.objectContaining({ instruction: 'Default instruction.' }),
+    );
+  });
+
+  it('reports an empty conversation without compacting', async () => {
+    const { deps: d, sent } = deps('/compact', {
+      options: resolveOptions({ stateDir: '/tmp/x', compaction: { agentId: 'summarizer' } }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { messages: [] } },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Nothing to compact — conversation is empty.');
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a compaction tool error', async () => {
+    const { deps: d, sent } = deps('/compact', {
+      options: resolveOptions({ stateDir: '/tmp/x', compaction: { agentId: 'summarizer' } }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return { result: { status: 'success', data: { messages: [{ id: 'm1' }] } }, conversationId: 'c' };
+      }
+      return { result: { status: 'error', error: 'boom' }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Compaction failed: boom');
+  });
+
+  it('reports a pending compaction approval', async () => {
+    const { deps: d, sent } = deps('/compact', {
+      options: resolveOptions({ stateDir: '/tmp/x', compaction: { agentId: 'summarizer' } }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return { result: { status: 'success', data: { messages: [{ id: 'm1' }] } }, conversationId: 'c' };
+      }
+      return { result: { status: 'pending_approval' }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Compaction failed: Awaiting approval.');
+  });
 });

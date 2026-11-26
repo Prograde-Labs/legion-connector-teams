@@ -9,6 +9,7 @@ import {
   listConversations,
 } from './conversations.js';
 import type { ResolvedOptions } from './options.js';
+import { formatToolResult } from './render.js';
 import type { TeamsState } from './state.js';
 import type { IAdaptiveCard } from '@microsoft/teams.cards';
 
@@ -31,6 +32,11 @@ export interface CommandDeps {
   send: (text: string) => Promise<void>;
   sendCard: (card: IAdaptiveCard) => Promise<void>;
   stopTyping?: () => void;
+}
+
+function toolFailure(result: { status: string; error?: string; message?: string }): string {
+  if (result.status === 'error') return result.error ?? 'unknown error';
+  return formatToolResult(result) || result.status;
 }
 
 export async function handleCommand(deps: CommandDeps): Promise<boolean> {
@@ -148,6 +154,74 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
         return true;
       } catch (error) {
         await deps.send(`Unable to list conversations: ${conversationErrorText(error)}`);
+        return true;
+      }
+    }
+    case '/compact': {
+      const compaction = deps.options.compaction;
+      if (!compaction) {
+        await deps.send('Compaction is not configured. Set the "compaction.agentId" connector option.');
+        return true;
+      }
+      const conversationId = deps.state.legionConversations[key];
+      if (!conversationId) {
+        await deps.send('Nothing to compact — no conversation yet.');
+        return true;
+      }
+      try {
+        const loaded = await deps.ctx.callTool(deps.participantId, 'get_conversation', {
+          conversationId,
+        });
+        if (loaded.result.status !== 'success') {
+          await deps.send(`Compaction failed: ${toolFailure(loaded.result)}`);
+          return true;
+        }
+        const messages = (loaded.result.data as { messages?: Array<{ id?: unknown }> } | undefined)
+          ?.messages ?? [];
+        const messageIds = messages
+          .map((message) => message.id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0);
+        if (messageIds.length === 0) {
+          await deps.send('Nothing to compact — conversation is empty.');
+          return true;
+        }
+        const instruction = rest.join(' ').trim() || compaction.instruction;
+        const compacted = await deps.ctx.callTool(deps.participantId, 'compact_conversation', {
+          conversationId,
+          messageIds,
+          agentId: compaction.agentId,
+          ...(instruction ? { instruction } : {}),
+        });
+        if (compacted.result.status !== 'success') {
+          await deps.send(`Compaction failed: ${toolFailure(compacted.result)}`);
+          return true;
+        }
+        const summaryMessageId = (compacted.result.data as { summaryMessageId?: unknown } | undefined)
+          ?.summaryMessageId;
+        if (typeof summaryMessageId !== 'string' || !summaryMessageId) {
+          await deps.send(`Compacted ${messageIds.length} messages — no summary message was returned.`);
+          return true;
+        }
+        const refreshed = await deps.ctx.callTool(deps.participantId, 'get_conversation', {
+          conversationId,
+        });
+        const summary = refreshed.result.status === 'success'
+          ? ((refreshed.result.data as {
+            messages?: Array<{ id?: unknown; content?: unknown }>;
+          } | undefined)?.messages ?? []).find((message) => message.id === summaryMessageId)
+          : undefined;
+        const content = typeof summary?.content === 'string' ? summary.content.trim() : '';
+        if (!content) {
+          await deps.send(`Compacted ${messageIds.length} messages — summary unavailable.`);
+          return true;
+        }
+        deps.stopTyping?.();
+        await deps.send(
+          `🗜 Compacted ${messageIds.length} messages into a summary:\n\n${content.slice(0, 3500)}`,
+        );
+        return true;
+      } catch (error) {
+        await deps.send(`Compaction failed: ${error instanceof Error ? error.message : String(error)}`);
         return true;
       }
     }
