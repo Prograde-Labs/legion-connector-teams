@@ -8,6 +8,7 @@ import {
   conversationErrorText,
   listConversations,
 } from './conversations.js';
+import type { ConversationEntry } from './conversations.js';
 import type { ResolvedOptions } from './options.js';
 import { formatToolResult } from './render.js';
 import type { TeamsState } from './state.js';
@@ -37,6 +38,27 @@ export interface CommandDeps {
 function toolFailure(result: { status: string; error?: string; message?: string }): string {
   if (result.status === 'error') return result.error ?? 'unknown error';
   return formatToolResult(result) || result.status;
+}
+
+function formatCount(value: unknown): string {
+  const number = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  return number.toLocaleString('en-US');
+}
+
+function formatUsage(totals: {
+  input?: unknown;
+  output?: unknown;
+  reasoning?: unknown;
+  cache?: { read?: unknown; write?: unknown };
+  cost?: unknown;
+}): string {
+  const cost = typeof totals.cost === 'number' && Number.isFinite(totals.cost) ? totals.cost : 0;
+  return [
+    `Tokens: in ${formatCount(totals.input)} · out ${formatCount(totals.output)}` +
+      ` · reasoning ${formatCount(totals.reasoning)}`,
+    `Cache: ${formatCount(totals.cache?.read)} read / ${formatCount(totals.cache?.write)} write` +
+      ` · Cost: $${cost.toFixed(4)}`,
+  ].join('\n');
 }
 
 export async function handleCommand(deps: CommandDeps): Promise<boolean> {
@@ -224,6 +246,72 @@ export async function handleCommand(deps: CommandDeps): Promise<boolean> {
         await deps.send(`Compaction failed: ${error instanceof Error ? error.message : String(error)}`);
         return true;
       }
+    }
+    case '/context': {
+      const conversationId = deps.state.legionConversations[key];
+      if (!conversationId) {
+        await deps.send('No conversation yet — send a message first.');
+        return true;
+      }
+      let loaded;
+      try {
+        loaded = await deps.ctx.callTool(deps.participantId, 'get_conversation', {
+          conversationId,
+        });
+      } catch (error) {
+        await deps.send(`Context unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        return true;
+      }
+      if (loaded.result.status !== 'success') {
+        await deps.send(`Context unavailable: ${toolFailure(loaded.result)}`);
+        return true;
+      }
+      const data = loaded.result.data as {
+        title?: unknown;
+        status?: unknown;
+        messages?: unknown;
+      } | undefined;
+      const activeMessages = Array.isArray(data?.messages) ? data.messages.length : 0;
+      const fallbackTitle =
+        typeof data?.title === 'string' && data.title.trim() ? data.title.trim() : conversationId;
+      const status =
+        typeof data?.status === 'string' && data.status.trim() ? data.status.trim() : 'unknown';
+
+      let meta: ConversationEntry | undefined;
+      try {
+        const entries = await listConversations(deps.ctx, deps.participantId);
+        meta = entries.find((entry) => entry.id === conversationId);
+      } catch {
+        meta = undefined;
+      }
+
+      let usageText: string;
+      try {
+        const usage = await deps.ctx.callTool(deps.participantId, 'query_usage', {
+          conversationId,
+        });
+        if (usage.result.status !== 'success') {
+          usageText = `Usage: unavailable (${toolFailure(usage.result)})`;
+        } else {
+          const totals = (usage.result.data as { totals?: Parameters<typeof formatUsage>[0] } | undefined)
+            ?.totals;
+          usageText = totals ? formatUsage(totals) : 'Usage: no usage recorded yet.';
+        }
+      } catch (error) {
+        usageText = `Usage: unavailable (${error instanceof Error ? error.message : String(error)})`;
+      }
+
+      const title = meta?.title ?? fallbackTitle;
+      const counts = meta
+        ? `Messages: ${meta.messageCount} total, ${activeMessages} active`
+        : `Messages: ${activeMessages} active`;
+      await deps.send([
+        `📊 Context — ${title}`,
+        `Conversation: ${conversationId}`,
+        `Status: ${status} · ${counts}`,
+        usageText,
+      ].join('\n'));
+      return true;
     }
     default:
       return false;
