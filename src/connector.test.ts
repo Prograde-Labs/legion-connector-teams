@@ -1007,6 +1007,8 @@ describe('TeamsConnector', () => {
     try {
       let release!: () => void;
       const gate = new Promise<void>((resolve) => { release = resolve; });
+      // The inbound key for aad-1's personal chat: app:<aadObjectId>. The switch
+      // must queue on this exact key, so holding it blocks the handler's work.
       const turn = connector['queue'].run('app:aad-1', async () => { await gate; });
       const [entry, handlers] = factory.mock.calls[0];
       await handlers.onConversationAction(entry, {
@@ -1021,9 +1023,15 @@ describe('TeamsConnector', () => {
           } } },
         },
       } as never);
+      // The handler lists conversations inside queue.run. If the switch used a
+      // different key it would start immediately and call the tool despite the
+      // in-flight turn still being blocked.
+      expect(callTool).not.toHaveBeenCalled();
       expect(updates).toHaveLength(0);
       release();
       await turn;
+      await vi.waitFor(() => expect(callTool).toHaveBeenCalledTimes(1));
+      expect(callTool).toHaveBeenCalledWith('alice', 'list_conversations', expect.anything());
       await vi.waitFor(() => expect(updates).toHaveLength(1));
     } finally {
       await connector.stop();
