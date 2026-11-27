@@ -60,6 +60,9 @@ const handlers: AppHandlers = {
   onToolAction: async () => ({ status: 200, body: {
     statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'Tool recorded.',
   } }),
+  onConversationAction: async () => ({ status: 200, body: {
+    statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'Switch recorded.',
+  } }),
 };
 
 describe('BotPool', () => {
@@ -102,6 +105,32 @@ describe('BotPool', () => {
         },
       });
       expect(onToolAction).toHaveBeenCalledWith(entry, context);
+    } finally {
+      on.mockRestore();
+    }
+  });
+  it('returns the invoke response from the SDK switch action callback', async () => {
+    const on = vi.spyOn(App.prototype, 'on');
+    const entry = bot('assistant', 'app');
+    const onConversationAction = vi.fn(handlers.onConversationAction);
+    try {
+      defaultAppFactory(
+        entry,
+        { ...handlers, onConversationAction },
+        { kind: 'http', expressApp: express() },
+      );
+      const callback = on.mock.calls.find(([name]) => name === 'card.action.switch')?.[1];
+      expect(callback).toBeDefined();
+      const context = { activity: {} } as never;
+      expect(await callback!(context)).toEqual({
+        status: 200,
+        body: {
+          statusCode: 200,
+          type: 'application/vnd.microsoft.activity.message',
+          value: 'Switch recorded.',
+        },
+      });
+      expect(onConversationAction).toHaveBeenCalledWith(entry, context);
     } finally {
       on.mockRestore();
     }

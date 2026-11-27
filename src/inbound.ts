@@ -21,6 +21,7 @@ import type { ResolvedOptions } from './options.js';
 import { sendText } from './render.js';
 import type { StateStore, TeamsState } from './state.js';
 import { recordMessage } from './tool-state.js';
+import type { IAdaptiveCard } from '@microsoft/teams.cards';
 
 export interface TeamsActivity {
   id?: string;
@@ -120,7 +121,15 @@ async function autoProvision(
   }
 
   let provisioned;
-  const tools = { ...existing?.tools, communicate: 'auto', approval_response: 'auto' };
+  const tools = {
+    ...existing?.tools,
+    communicate: 'auto',
+    approval_response: 'auto',
+    list_conversations: 'auto',
+    get_conversation: 'auto',
+    query_usage: 'auto',
+    compact_conversation: 'auto',
+  };
   try {
     provisioned = existing
       ? await deps.ctx.callTool(deps.options.provisionerId, 'modify_user', { id, tools })
@@ -179,7 +188,15 @@ async function autoProvisionGroup(
   }
 
   let provisioned;
-  const tools = { ...existing?.tools, communicate: 'auto', approval_response: 'auto' };
+  const tools = {
+    ...existing?.tools,
+    communicate: 'auto',
+    approval_response: 'auto',
+    list_conversations: 'auto',
+    get_conversation: 'auto',
+    query_usage: 'auto',
+    compact_conversation: 'auto',
+  };
   try {
     provisioned = existing
       ? await deps.ctx.callTool(deps.options.provisionerId, 'modify_user', { id, tools })
@@ -220,6 +237,19 @@ async function autoProvisionGroup(
   await reply(`Welcome, ${name}. This group is now paired as ${id}.`);
 }
 
+function startTyping(context: TeamsContextLike, intervalMs: number): () => void {
+  if (intervalMs <= 0) return () => undefined;
+  const tick = () => context.send(new TypingActivityInput()).catch(() => undefined);
+  tick();
+  const interval = setInterval(tick, intervalMs);
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(interval);
+  };
+}
+
 async function runTurn(args: {
   deps: InboundDeps;
   context: TeamsContextLike;
@@ -228,18 +258,7 @@ async function runTurn(args: {
   text: string;
 }): Promise<void> {
   const { deps, context, participantId, key, text } = args;
-  let typing: NodeJS.Timeout | undefined;
-  const stopTyping = () => {
-    if (typing) {
-      clearInterval(typing);
-      typing = undefined;
-    }
-  };
-  if (deps.options.typingIntervalMs > 0) {
-    const tick = () => context.send(new TypingActivityInput()).catch(() => undefined);
-    tick();
-    typing = setInterval(tick, deps.options.typingIntervalMs);
-  }
+  const stopTyping = startTyping(context, deps.options.typingIntervalMs);
 
   try {
     const turn = await runCommunicate({
@@ -305,6 +324,11 @@ export async function handleInbound(
 ): Promise<void> {
   const activity = context.activity;
   const reply = (text: string) => sendText((message) => context.send(message), deps.options.aiLabel, text);
+  const sendCard = async (card: IAdaptiveCard) => {
+    const activity = new MessageActivityInput().addCard('adaptive', card);
+    if (deps.options.aiLabel) activity.addAiGenerated();
+    await context.send(activity);
+  };
   const conversationType = activity.conversation?.conversationType;
   const isGroup = conversationType === 'groupChat';
 
@@ -372,25 +396,32 @@ export async function handleInbound(
         const text = stripBotMention(activity);
         if (text.startsWith('/')) {
           const sender = findTeamsActor(deps.collective, aadObjectId);
-          const handled = await handleCommand({
-            appId: deps.bot.appId,
-            participantId: group.participantId,
-            senderParticipantId: sender?.id,
-            aadObjectId,
-            senderName: activity.from?.name,
-            conversationKey: key,
-            conversationId,
-            isFallback: outcome.kind === 'fallback',
-            isGroup: true,
-            text,
-            state: deps.state,
-            ctx: deps.ctx,
-            options: deps.options,
-            send: reply,
-          });
-          if (handled) {
-            await deps.stateStore.save(deps.state);
-            return;
+          const stopTyping = startTyping(context, deps.options.typingIntervalMs);
+          try {
+            const handled = await handleCommand({
+              appId: deps.bot.appId,
+              participantId: group.participantId,
+              senderParticipantId: sender?.id,
+              aadObjectId,
+              senderName: activity.from?.name,
+              conversationKey: key,
+              conversationId,
+              isFallback: outcome.kind === 'fallback',
+              isGroup: true,
+              text,
+              state: deps.state,
+              ctx: deps.ctx,
+              options: deps.options,
+              send: reply,
+              sendCard,
+              stopTyping,
+            });
+            if (handled) {
+              await deps.stateStore.save(deps.state);
+              return;
+            }
+          } finally {
+            stopTyping();
           }
         }
 
@@ -454,23 +485,30 @@ export async function handleInbound(
       }
 
       if (text.startsWith('/')) {
-        const handled = await handleCommand({
-          appId: deps.bot.appId,
-          participantId: user.participantId,
-          senderParticipantId: user.participantId,
-          aadObjectId: user.aadObjectId,
-          senderName: user.displayName,
-          conversationKey: key,
-          isFallback: outcome.kind === 'fallback',
-          text,
-          state: deps.state,
-          ctx: deps.ctx,
-          options: deps.options,
-          send: reply,
-        });
-        if (handled) {
-          await deps.stateStore.save(deps.state);
-          return;
+        const stopTyping = startTyping(context, deps.options.typingIntervalMs);
+        try {
+          const handled = await handleCommand({
+            appId: deps.bot.appId,
+            participantId: user.participantId,
+            senderParticipantId: user.participantId,
+            aadObjectId: user.aadObjectId,
+            senderName: user.displayName,
+            conversationKey: key,
+            isFallback: outcome.kind === 'fallback',
+            text,
+            state: deps.state,
+            ctx: deps.ctx,
+            options: deps.options,
+            send: reply,
+            sendCard,
+            stopTyping,
+          });
+          if (handled) {
+            await deps.stateStore.save(deps.state);
+            return;
+          }
+        } finally {
+          stopTyping();
         }
       }
 

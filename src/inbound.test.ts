@@ -6,6 +6,7 @@ import { resolveOptions } from './options.js';
 import type { BotEntry, CollectiveLike } from './directory.js';
 import type { ConnectorContext, StreamChunk } from '@legion-collective/core';
 import { rememberPendingPair } from './pairing.js';
+import { TypingActivityInput } from '@microsoft/teams.api';
 
 function setup(participants: Array<Record<string, unknown>> = []) {
   const state = emptyState();
@@ -236,6 +237,27 @@ describe('handleInbound', () => {
     expect(s.streamTool).not.toHaveBeenCalled();
   });
 
+  it('sends the conversation picker card for /switch', async () => {
+    const s = setup([alice]);
+    const send = vi.fn(async () => undefined);
+    await handleInbound(inboundDeps(s), { activity: activity('/switch'), send });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [expect.objectContaining({
+        contentType: 'application/vnd.microsoft.card.adaptive',
+      })],
+    }));
+  });
+
+  it('sends a typing indicator while handling a command', async () => {
+    const s = setup([alice]);
+    const send = vi.fn(async () => undefined);
+    await handleInbound(
+      inboundDeps(s, { typingIntervalMs: 60_000 }),
+      { activity: activity('/new'), send },
+    );
+    expect(send).toHaveBeenCalledWith(expect.any(TypingActivityInput));
+  });
+
   it('auto-provisions then pairs an unknown user', async () => {
     const s = setup();
     const send = vi.fn(async (_value: unknown) => undefined);
@@ -247,7 +269,14 @@ describe('handleInbound', () => {
     );
     expect(s.callTool).toHaveBeenCalledWith('operator', 'create_user', expect.objectContaining({
       name: 'Alice',
-      tools: { communicate: 'auto', approval_response: 'auto' },
+      tools: {
+        communicate: 'auto',
+        approval_response: 'auto',
+        list_conversations: 'auto',
+        get_conversation: 'auto',
+        query_usage: 'auto',
+        compact_conversation: 'auto',
+      },
     }));
     expect(s.callTool).toHaveBeenCalledWith('operator', 'pair', expect.objectContaining({
       connector: 'teams', externalId: 'aad-7',
@@ -305,7 +334,15 @@ describe('handleInbound', () => {
     );
     expect(s.callTool).toHaveBeenCalledTimes(2);
     expect(s.callTool).toHaveBeenNthCalledWith(1, 'operator', 'modify_user', {
-      id: 'teams-alice-1j42jy', tools: { search: 'auto', communicate: 'auto', approval_response: 'auto' },
+      id: 'teams-alice-1j42jy', tools: {
+        search: 'auto',
+        communicate: 'auto',
+        approval_response: 'auto',
+        list_conversations: 'auto',
+        get_conversation: 'auto',
+        query_usage: 'auto',
+        compact_conversation: 'auto',
+      },
     });
     expect(s.callTool).toHaveBeenNthCalledWith(2, 'operator', 'pair', expect.objectContaining({
       participantId: 'teams-alice-1j42jy', externalId: 'aad-7',
@@ -463,7 +500,14 @@ describe('handleInbound group chats', () => {
     expect(s.callTool).toHaveBeenCalledWith('operator', 'create_user', expect.objectContaining({
       id: 'teams-group-engineering-eqrgnh',
       name: 'Engineering',
-      tools: { communicate: 'auto', approval_response: 'auto' },
+      tools: {
+        communicate: 'auto',
+        approval_response: 'auto',
+        list_conversations: 'auto',
+        get_conversation: 'auto',
+        query_usage: 'auto',
+        compact_conversation: 'auto',
+      },
     }));
     expect(s.callTool).toHaveBeenCalledWith('operator', 'pair', {
       participantId: 'teams-group-engineering-eqrgnh',

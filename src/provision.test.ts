@@ -81,6 +81,21 @@ esac
     expect(stdout + stderr).not.toMatch(/stub-secret|operator-token|stub-password/);
     const manifest = JSON.parse(await readFile(join(workspace, '.legion/teams-apps/assistant/manifest.json'), 'utf8'));
     expect(manifest.bots).toEqual([expect.objectContaining({ botId: appId, scopes: ['personal', 'groupChat'] })]);
+    expect(manifest.version).toBe('1.1.0');
+    expect(manifest.commandLists).toEqual([
+      {
+        scopes: ['personal', 'groupChat'],
+        commands: [
+          { title: 'new', description: 'Start a new conversation' },
+          { title: 'switch', description: 'List and switch to an existing conversation' },
+          { title: 'compact', description: 'Compact this conversation' },
+          { title: 'context', description: 'Show usage and context details' },
+          { title: 'whoami', description: 'Show identity and chat details' },
+          { title: 'pair', description: 'Pair a pending Teams identity' },
+          { title: 'help', description: 'List commands' },
+        ],
+      },
+    ]);
     expect((await readParticipant()).identities).toEqual([userIdentity, botIdentity(appId)]);
     const request = (tool: string, args: object) => ({ method: 'POST', url: '/api/execute?stream=false',
       authorization: 'Bearer operator-token', body: { tool, args } });

@@ -105,7 +105,7 @@ const appId = reuse ? previous.externalId : env.CLIENT_ID ?? '<app-id>';
 const manifest = {
   $schema: 'https://developer.microsoft.com/en-us/json-schemas/teams/v1.19/MicrosoftTeams.schema.json',
   manifestVersion: '1.19',
-  version: '1.0.0',
+  version: '1.1.0',
   id: appId,
   developer: {
     name: 'Prograde Labs',
@@ -122,6 +122,20 @@ const manifest = {
   accentColor: '#5865F2',
   bots: [{ botId: appId, scopes: ['personal', 'groupChat'], supportsFiles: false, isNotificationOnly: false }],
   permissions: ['identity', 'messageTeamMembers'],
+  commandLists: [
+    {
+      scopes: ['personal', 'groupChat'],
+      commands: [
+        { title: 'new', description: 'Start a new conversation' },
+        { title: 'switch', description: 'List and switch to an existing conversation' },
+        { title: 'compact', description: 'Compact this conversation' },
+        { title: 'context', description: 'Show usage and context details' },
+        { title: 'whoami', description: 'Show identity and chat details' },
+        { title: 'pair', description: 'Pair a pending Teams identity' },
+        { title: 'help', description: 'List commands' },
+      ],
+    },
+  ],
   validDomains: [],
 };
 

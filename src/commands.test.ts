@@ -5,12 +5,15 @@ import { emptyState } from './state.js';
 import { resolveOptions } from './options.js';
 import { rememberPendingPair } from './pairing.js';
 import type { ConnectorContext } from '@legion-collective/core';
+import type { IAdaptiveCard } from '@microsoft/teams.cards';
 
 function deps(text: string, overrides: Record<string, unknown> = {}) {
   const sent: string[] = [];
+  const cards: IAdaptiveCard[] = [];
   const callTool = vi.fn(async () => ({ result: { status: 'success' }, conversationId: 'c' }));
   return {
     sent,
+    cards,
     callTool,
     deps: {
       appId: 'app',
@@ -21,6 +24,7 @@ function deps(text: string, overrides: Record<string, unknown> = {}) {
       ctx: { callTool } as unknown as ConnectorContext,
       options: resolveOptions({ stateDir: '/tmp/x' }),
       send: async (value: string) => { sent.push(value); },
+      sendCard: async (card: IAdaptiveCard) => { cards.push(card); },
       ...overrides,
     },
   };
@@ -229,10 +233,16 @@ describe('commands', () => {
     expect(d.state.pendingPairs[code]).toBeDefined();
   });
 
-  it('mentions group behavior in /help', async () => {
+  it('lists the new commands and group scoping in /help', async () => {
     const { deps: d, sent } = deps('/help');
     await expect(handleCommand(d)).resolves.toBe(true);
-    expect(sent[0]).toContain('In a group chat, /new and /whoami act on the group; /pair runs as you.');
+    expect(sent[0]).toContain('/switch — list and switch to an existing conversation');
+    expect(sent[0]).toContain('/switch <conversation-id> — switch directly');
+    expect(sent[0]).toContain('/compact [instruction] — summarize/compact this conversation');
+    expect(sent[0]).toContain('/context — show usage and context details');
+    expect(sent[0]).toContain(
+      'In a group chat, /new, /switch, /compact, and /context act on the group; /pair runs as you.',
+    );
   });
 
   it('rejects /pair from an unregistered human in a group', async () => {
@@ -251,5 +261,388 @@ describe('commands', () => {
     expect(callTool).not.toHaveBeenCalled();
     expect(sent[0]).toBe('Only registered users can redeem pairing codes.');
     expect(d.state.pendingPairs[code]).toBeDefined();
+  });
+
+  it('sends the conversation picker card on /switch', async () => {
+    const { deps: d, cards } = deps('/switch');
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [
+        { id: 'legion-1', resolvedTitle: 'First', messageCount: 3,
+          updatedAt: '2026-11-24T00:00:00.000Z', status: 'active' },
+      ] } },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(callTool).toHaveBeenCalledWith('alice', 'list_conversations', {
+      participantId: 'alice',
+      status: 'active',
+    });
+    expect(cards).toHaveLength(1);
+    expect(JSON.stringify(cards[0])).toContain('First');
+  });
+
+  it('switches directly to a conversation id and cleans the old target', async () => {
+    const { deps: d, sent } = deps('/switch legion-2');
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    d.state.legionConversationTargets['legion-1'] = 'app:alice';
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [
+        { id: 'legion-2', resolvedTitle: 'Second', messageCount: 2,
+          updatedAt: '2026-11-25T00:00:00.000Z', status: 'active' },
+      ] } },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(d.state.legionConversations['app:alice']).toBe('legion-2');
+    expect(d.state.legionConversationTargets['legion-1']).toBeUndefined();
+    expect(d.state.legionConversationTargets['legion-2']).toBe('app:alice');
+    expect(sent[0]).toBe('Switched to Second (2 messages).');
+  });
+
+  it('reports the current conversation on a direct switch', async () => {
+    const { deps: d, sent } = deps('/switch legion-1');
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [
+        { id: 'legion-1', resolvedTitle: 'First', messageCount: 3,
+          updatedAt: '2026-11-24T00:00:00.000Z', status: 'active' },
+      ] } },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Already on First.');
+  });
+
+  it('reports an unknown conversation id', async () => {
+    const { deps: d, sent } = deps('/switch missing');
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [] } },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Conversation not found. Use /switch to list active conversations.');
+  });
+
+  it('reports a listing failure', async () => {
+    const { deps: d, sent } = deps('/switch');
+    const callTool = vi.fn(async () => ({
+      result: { status: 'error', error: 'not authorized' },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Unable to list conversations: not authorized');
+  });
+
+  it('uses the group key for /switch in a group chat', async () => {
+    const { deps: d, sent } = deps('/switch legion-2', {
+      participantId: 'team-eng',
+      isGroup: true,
+      conversationKey: 'app:team-eng:19:g@thread.v2',
+      conversationId: '19:g@thread.v2',
+    });
+    d.state.legionConversations['app:team-eng:19:g@thread.v2'] = 'legion-1';
+    d.state.legionConversationTargets['legion-1'] = 'app:team-eng:19:g@thread.v2';
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [
+        { id: 'legion-2', resolvedTitle: 'Second', messageCount: 2,
+          updatedAt: '2026-11-25T00:00:00.000Z', status: 'active' },
+      ] } },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(callTool).toHaveBeenCalledWith('team-eng', 'list_conversations', expect.anything());
+    expect(d.state.legionConversations['app:team-eng:19:g@thread.v2']).toBe('legion-2');
+    expect(d.state.legionConversationTargets['legion-1']).toBeUndefined();
+    expect(d.state.legionConversationTargets['legion-2']).toBe('app:team-eng:19:g@thread.v2');
+    expect(sent[0]).toContain('Switched to Second');
+  });
+
+  it('uses the fallback suffix key for /switch in a personal chat', async () => {
+    const { deps: d, sent } = deps('/switch legion-2', {
+      participantId: 'operator',
+      isFallback: true,
+      conversationKey: 'app:operator:aad-9',
+    });
+    d.state.legionConversations['app:operator:aad-9'] = 'legion-1';
+    d.state.legionConversationTargets['legion-1'] = 'app:operator:aad-9';
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { conversations: [
+        { id: 'legion-2', resolvedTitle: 'Second', messageCount: 2,
+          updatedAt: '2026-11-25T00:00:00.000Z', status: 'active' },
+      ] } },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(callTool).toHaveBeenCalledWith('operator', 'list_conversations', expect.anything());
+    expect(d.state.legionConversations['app:operator:aad-9']).toBe('legion-2');
+    expect(d.state.legionConversationTargets['legion-1']).toBeUndefined();
+    expect(d.state.legionConversationTargets['legion-2']).toBe('app:operator:aad-9');
+    expect(sent[0]).toContain('Switched to Second');
+  });
+
+  it('reports missing compaction configuration without calling a tool', async () => {
+    const { deps: d, sent, callTool } = deps('/compact');
+    await handleCommand(d);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(sent[0]).toBe(
+      'Compaction is not configured. Set the "compaction.agentId" connector option.',
+    );
+  });
+
+  it('reports no conversation', async () => {
+    const { deps: d, sent } = deps('/compact', {
+      options: resolveOptions({ stateDir: '/tmp/x', compaction: { agentId: 'summarizer' } }),
+    });
+    await handleCommand(d);
+    expect(sent[0]).toBe('Nothing to compact — no conversation yet.');
+  });
+
+  it('compacts the active chain and reports the summary', async () => {
+    const { deps: d, sent } = deps('/compact be brief', {
+      options: resolveOptions({
+        stateDir: '/tmp/x',
+        compaction: { agentId: 'summarizer', instruction: 'Default instruction.' },
+      }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    let getCalls = 0;
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        getCalls += 1;
+        return {
+          result: {
+            status: 'success',
+            data: {
+              messages: getCalls === 1
+                ? [{ id: 'm1', content: 'one' }, { id: 'm2', content: 'two' }]
+                : [{ id: 's1', content: 'Summary text' }],
+            },
+          },
+          conversationId: 'c',
+        };
+      }
+      return {
+        result: { status: 'success', data: { summaryMessageId: 's1' } },
+        conversationId: 'c',
+      };
+    });
+    const stopTyping = vi.fn();
+    await handleCommand({
+      ...d,
+      ctx: { callTool } as unknown as ConnectorContext,
+      stopTyping,
+    });
+    expect(callTool).toHaveBeenCalledWith('alice', 'compact_conversation', {
+      conversationId: 'legion-1',
+      messageIds: ['m1', 'm2'],
+      agentId: 'summarizer',
+      instruction: 'be brief',
+    });
+    expect(stopTyping).toHaveBeenCalledOnce();
+    expect(sent[0]).toBe('🗜 Compacted 2 messages into a summary:\n\nSummary text');
+  });
+
+  it('uses the default instruction for a bare /compact', async () => {
+    const { deps: d } = deps('/compact', {
+      options: resolveOptions({
+        stateDir: '/tmp/x',
+        compaction: { agentId: 'summarizer', instruction: 'Default instruction.' },
+      }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return { result: { status: 'success', data: { messages: [{ id: 'm1' }] } }, conversationId: 'c' };
+      }
+      return { result: { status: 'success', data: { summaryMessageId: 's1' } }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(callTool).toHaveBeenCalledWith(
+      'alice',
+      'compact_conversation',
+      expect.objectContaining({ instruction: 'Default instruction.' }),
+    );
+  });
+
+  it('reports an empty conversation without compacting', async () => {
+    const { deps: d, sent } = deps('/compact', {
+      options: resolveOptions({ stateDir: '/tmp/x', compaction: { agentId: 'summarizer' } }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async () => ({
+      result: { status: 'success', data: { messages: [] } },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Nothing to compact — conversation is empty.');
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a compaction tool error', async () => {
+    const { deps: d, sent } = deps('/compact', {
+      options: resolveOptions({ stateDir: '/tmp/x', compaction: { agentId: 'summarizer' } }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return { result: { status: 'success', data: { messages: [{ id: 'm1' }] } }, conversationId: 'c' };
+      }
+      return { result: { status: 'error', error: 'boom' }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Compaction failed: boom');
+  });
+
+  it('reports a pending compaction approval', async () => {
+    const { deps: d, sent } = deps('/compact', {
+      options: resolveOptions({ stateDir: '/tmp/x', compaction: { agentId: 'summarizer' } }),
+    });
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return { result: { status: 'success', data: { messages: [{ id: 'm1' }] } }, conversationId: 'c' };
+      }
+      return { result: { status: 'pending_approval' }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Compaction failed: Awaiting approval.');
+  });
+
+  it('shows conversation and usage details on /context', async () => {
+    const { deps: d, sent } = deps('/context');
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return {
+          result: {
+            status: 'success',
+            data: {
+              title: 'Fallback title',
+              status: 'active',
+              messages: [{ id: 'm1' }, { id: 'm2' }],
+            },
+          },
+          conversationId: 'c',
+        };
+      }
+      if (tool === 'list_conversations') {
+        return {
+          result: {
+            status: 'success',
+            data: {
+              conversations: [{
+                id: 'legion-1', resolvedTitle: 'Project X', messageCount: 10,
+                updatedAt: '2026-11-25T00:00:00.000Z', status: 'active',
+              }],
+            },
+          },
+          conversationId: 'c',
+        };
+      }
+      return {
+        result: {
+          status: 'success',
+          data: {
+            totals: {
+              messageCount: 10, input: 1234, output: 567, reasoning: 89,
+              cache: { read: 100, write: 50 }, cost: 0.1234,
+            },
+          },
+        },
+        conversationId: 'c',
+      };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(callTool).toHaveBeenCalledWith('alice', 'query_usage', { conversationId: 'legion-1' });
+    expect(sent[0]).toContain('📊 Context — Project X');
+    expect(sent[0]).toContain('Conversation: legion-1');
+    expect(sent[0]).toContain('Status: active · Messages: 10 total, 2 active');
+    expect(sent[0]).toContain('Tokens: in 1,234 · out 567 · reasoning 89');
+    expect(sent[0]).toContain('Cache: 100 read / 50 write · Cost: $0.1234');
+  });
+
+  it('prefers the get_conversation title when the list meta title is only the id', async () => {
+    const { deps: d, sent } = deps('/context');
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return {
+          result: { status: 'success', data: { title: 'Actual title', status: 'active', messages: [] } },
+          conversationId: 'c',
+        };
+      }
+      if (tool === 'list_conversations') {
+        return {
+          result: {
+            status: 'success',
+            data: {
+              conversations: [{
+                id: 'legion-1', messageCount: 1,
+                updatedAt: '2026-11-25T00:00:00.000Z', status: 'active',
+              }],
+            },
+          },
+          conversationId: 'c',
+        };
+      }
+      return { result: { status: 'success', data: {} }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toContain('📊 Context — Actual title');
+    expect(sent[0]).not.toContain('📊 Context — legion-1');
+  });
+
+  it('degrades to active count when the conversation meta is unavailable', async () => {
+    const { deps: d, sent } = deps('/context');
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return {
+          result: { status: 'success', data: { title: 'Fallback title', status: 'active', messages: [{ id: 'm1' }] } },
+          conversationId: 'c',
+        };
+      }
+      if (tool === 'list_conversations') {
+        return { result: { status: 'error', error: 'unavailable' }, conversationId: 'c' };
+      }
+      return { result: { status: 'error', error: 'usage offline' }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toContain('📊 Context — Fallback title');
+    expect(sent[0]).toContain('Messages: 1 active');
+    expect(sent[0]).toContain('Usage: unavailable (usage offline)');
+  });
+
+  it('reports no usage recorded', async () => {
+    const { deps: d, sent } = deps('/context');
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async (_participant: string, tool: string) => {
+      if (tool === 'get_conversation') {
+        return { result: { status: 'success', data: { title: 'Thread', status: 'active', messages: [] } }, conversationId: 'c' };
+      }
+      if (tool === 'list_conversations') {
+        return { result: { status: 'success', data: { conversations: [] } }, conversationId: 'c' };
+      }
+      return { result: { status: 'success', data: {} }, conversationId: 'c' };
+    });
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toContain('Usage: no usage recorded yet.');
+  });
+
+  it('reports no conversation on /context', async () => {
+    const { deps: d, sent } = deps('/context');
+    await handleCommand(d);
+    expect(sent[0]).toBe('No conversation yet — send a message first.');
+  });
+
+  it('reports an unavailable conversation on /context', async () => {
+    const { deps: d, sent } = deps('/context');
+    d.state.legionConversations['app:alice'] = 'legion-1';
+    const callTool = vi.fn(async () => ({
+      result: { status: 'error', error: 'not found' },
+      conversationId: 'c',
+    }));
+    await handleCommand({ ...d, ctx: { callTool } as unknown as ConnectorContext });
+    expect(sent[0]).toBe('Context unavailable: not found');
   });
 });

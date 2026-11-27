@@ -155,3 +155,45 @@ export function resolveIdentity(args: {
       return { kind: 'reject', aadObjectId };
   }
 }
+
+export interface ChatParticipant {
+  participantId: string;
+  key: string;
+}
+
+function fallbackParticipant(
+  collective: CollectiveLike,
+  options: ResolvedOptions,
+) {
+  if (options.unknownUserPolicy !== 'fallback' || !options.fallbackUserId) return undefined;
+  const fallback = collective.get(options.fallbackUserId);
+  return fallback && (fallback.status ?? 'active') !== 'retired' ? fallback : undefined;
+}
+
+export function resolveChatParticipant(args: {
+  collective: CollectiveLike;
+  appId: string;
+  aadObjectId?: string;
+  conversationId?: string;
+  isGroup: boolean;
+  options: ResolvedOptions;
+}): ChatParticipant | undefined {
+  const { collective, appId, aadObjectId, conversationId, isGroup, options } = args;
+
+  if (isGroup) {
+    if (!conversationId) return undefined;
+    const group = findGroupActor(collective, conversationId);
+    if (group) return { participantId: group.id, key: `${appId}:${group.id}:${conversationId}` };
+    const fallback = fallbackParticipant(collective, options);
+    return fallback
+      ? { participantId: fallback.id, key: `${appId}:${fallback.id}:${conversationId}` }
+      : undefined;
+  }
+
+  const user = aadObjectId ? findTeamsActor(collective, aadObjectId) : undefined;
+  if (user) return { participantId: user.id, key: `${appId}:${user.id}` };
+  const fallback = fallbackParticipant(collective, options);
+  return fallback && aadObjectId
+    ? { participantId: fallback.id, key: `${appId}:${fallback.id}:${aadObjectId}` }
+    : undefined;
+}

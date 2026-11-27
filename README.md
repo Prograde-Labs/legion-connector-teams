@@ -70,6 +70,7 @@ Options and defaults:
 | `tools` | all three (`cards`, `reactions`, `list`) | Which Teams tools the connector contributes: an array subset of `cards`, `reactions`, `list`, or `false` to contribute none. |
 | `maxMessageRecords` | `2000` | Maximum inbound/outbound Teams message records kept for message-id resolution; oldest records are pruned. |
 | `maxCardBytes` | `28000` | Maximum serialized Adaptive Card size accepted by `teams__send_card`. |
+| `compaction` | unset | `{ agentId, instruction? }` for `/compact`; `agentId` is the summarizer agent and `instruction` overrides the default summarization instruction. |
 
 HTTP listens on port 3978 by default, with each bot at `/teams/<participantId>/api/messages` and an unauthenticated `GET /health`. Socket Mode (`"transport": "socket"`) is experimental, intended for new bots, and opens one socket per configured geo per bot; it has no HTTP listener. Teams streaming is supported in 1:1 and group chats; team channels are not supported. Teams allows one open stream per chat, so inbound turns are serialized per conversation.
 
@@ -77,9 +78,24 @@ HTTP listens on port 3978 by default, with each bot at `/teams/<participantId>/a
 
 Each Teams-facing agent has a `teams-bot` identity whose `externalId` is its app ID. Its Legion SecretStore entry is scoped to that participant, keyed `teams-bot/<appId>`, and contains JSON `{ "appId": "...", "clientSecret": "...", "tenantId": "..." }`. Set `LEGION_SECRETS_KEY` for Legion; the connector cannot start without its SecretStore. Never commit credentials or the provisioning environment file.
 
-Users have a `teams` identity whose `externalId` is their Entra `aadObjectId` (the connector falls back to the Teams sender ID if absent). Unknown users default to receiving a pairing code. They give the code to a registered user, who runs `/pair <code> <participant-id>` in a personal chat or a group chat with the same bot. The connector calls Legion's core `pair` tool, subject to the caller's AuthEngine policy. Configure `pairingParticipantId` if another participant should make that call. Auto-provisioning requires `create_user` (or `modify_user` for an existing account) for `provisionerId` and `pair` for the pairing caller. It grants the provisioned user `communicate` and `approval_response`.
+Users have a `teams` identity whose `externalId` is their Entra `aadObjectId` (the connector falls back to the Teams sender ID if absent). Unknown users default to receiving a pairing code. They give the code to a registered user, who runs `/pair <code> <participant-id>` in a personal chat or a group chat with the same bot. The connector calls Legion's core `pair` tool, subject to the caller's AuthEngine policy. Configure `pairingParticipantId` if another participant should make that call. Auto-provisioning requires `create_user` (or `modify_user` for an existing account) for `provisionerId` and `pair` for the pairing caller. It grants the provisioned user `communicate`, `approval_response`, `list_conversations`, `get_conversation`, `query_usage`, and `compact_conversation`.
 
-Group chats are modelled as one Legion `user` participant with a `teams-group` identity whose `externalId` is the Teams conversation ID. The group uses the same `unknownUserPolicy` as personal chats. With `auto-provision`, the participant ID is `teams-group-<name>-<hash>`; unnamed groups use `Teams group <hash>`. Group messages are prefixed with the sender's name by default. `/new` and `/whoami` act on the group, while `/pair` runs as the registered human who typed it. Replies are routed back through the Legion conversation target map, so a fallback participant paired to several groups still answers in the originating group.
+Existing paired users and groups are not auto-provisioned again. To enable `/switch`, `/context`, and `/compact` for an existing participant, grant the four conversation tools:
+
+```json
+{
+  "tools": {
+    "list_conversations": "auto",
+    "get_conversation": "auto",
+    "query_usage": "auto",
+    "compact_conversation": "auto"
+  }
+}
+```
+
+Commands fail closed when a grant is missing: the core tool error appears in the reply.
+
+Group chats are modelled as one Legion `user` participant with a `teams-group` identity whose `externalId` is the Teams conversation ID. The group uses the same `unknownUserPolicy` as personal chats. With `auto-provision`, the participant ID is `teams-group-<name>-<hash>`; unnamed groups use `Teams group <hash>`. Group messages are prefixed with the sender's name by default. `/new`, `/switch`, `/compact`, `/context`, and `/whoami` act on the group, while `/pair` runs as the registered human who typed it. Replies are routed back through the Legion conversation target map, so a fallback participant paired to several groups still answers in the originating group.
 
 Fallback maps unknown users to one shared Legion participant (`fallbackUserId`) but keeps a separate conversation and Legion thread per Teams sender, and a separate conversation per group, so fallback conversations may now be groups as well as personal chats. Proactive delivery is best effort: the Legion conversation target map takes precedence, then an exact participant route; otherwise the bot sends to the most recently active personal fallback chat (group records are excluded from that scan). It cannot reliably target a particular fallback sender, so avoid using shared fallback for private proactive messages. Proactive failures are no longer silent: failed sends are logged; both `failed` and `not-reachable` are returned to the initiating `communicate` call with a sanitized reason, and thread learning for outbound-initiated conversations is on by default (`learnOutboundThread: true`). An unresolved group cannot run `/pair` from inside itself; its pairing code must be redeemed from another chat with the same bot.
 
@@ -192,7 +208,11 @@ approval flow for button tools is a follow-up.
 
 ## Chat commands
 
-- `/new` — start a new Legion conversation for the current chat (the group, in a group chat).
+- `/new` — start a new Legion conversation for the current chat (the group, in a group chat); the previous conversation remains available to `/switch`.
+- `/switch` — list the chat participant's active Legion conversations as an Adaptive Card; choose one to switch this chat to it. In a personal chat, a shared fallback participant may list threads from other fallback chats; choosing one still rebinds only this Teams chat.
+- `/switch <conversation-id>` — switch directly to a listed active conversation.
+- `/compact [instruction]` — compact the current conversation through the configured summarizer agent; the optional instruction overrides the default.
+- `/context` — show the current conversation title, status, message counts, and token/cost totals.
 - `/pair <code> <participant-id>` — pair a pending identity; in a group chat it runs as the registered human who typed it.
 - `/whoami` — show the current participant, chat, sender, and bot app.
 - `/help` — list commands.
@@ -215,6 +235,8 @@ The script reuses an existing `teams-bot` app ID and its stored credentials with
 Use `--force` to register a new bot and replace the identity in the participant file. The running collective still has the old identity until it is reconciled or Legion is restarted; restart promptly before making further changes to that participant. The old Teams registration is not deleted. Both scripts accept `--force`, `--dry-run`, and `--socket`; without `--participants` the batch script selects non-retired agents. **Dry runs still write manifests and icons and set a placeholder identity for bots they would create**, so use a disposable workspace. With `--socket`, `teams app create` runs with `--messaging-mode socket`; `--base-url` is optional.
 
 Install each generated app manually in Teams using the printed install link or package. If SecretStore setup fails after app creation, credentials remain in the environment file; follow the script's recovery message before rerunning to avoid duplicate registrations.
+
+The manifest is version `1.1.0` and includes a `commandLists` entry for personal and group chats. Existing installs do not show the command list until the app package is updated in Teams; rerun the provisioning script for each bot and upload or update the generated package.
 
 ## Testing
 

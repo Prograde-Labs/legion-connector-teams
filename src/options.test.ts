@@ -72,3 +72,37 @@ describe('resolveOptions tools', () => {
     expect(() => resolveOptions({ stateDir: '/tmp/x', maxCardBytes: 0 })).toThrow(/maxCardBytes/);
   });
 });
+
+describe('resolveOptions compaction', () => {
+  it('defaults to unset', () => {
+    expect(resolveOptions({ stateDir: '/tmp/x' }).compaction).toBeUndefined();
+  });
+
+  it('accepts an agent and instruction', () => {
+    expect(resolveOptions({
+      stateDir: '/tmp/x',
+      compaction: { agentId: 'summarizer', instruction: 'Be brief.' },
+    }).compaction).toEqual({ agentId: 'summarizer', instruction: 'Be brief.' });
+  });
+
+  it('accepts an agent without an instruction', () => {
+    expect(resolveOptions({
+      stateDir: '/tmp/x',
+      compaction: { agentId: 'summarizer' },
+    }).compaction).toEqual({ agentId: 'summarizer' });
+  });
+
+  it.each([
+    [{ agentId: '' }, /agentId/],
+    [{ agentId: '   ' }, /agentId/],
+    [{ agentId: 'summarizer', instruction: 42 }, /instruction/],
+  ])('rejects invalid compaction %j', (compaction, message) => {
+    expect(() => resolveOptions({ stateDir: '/tmp/x', compaction: compaction as never }))
+      .toThrow(message);
+  });
+
+  it('rejects a non-object compaction value', () => {
+    expect(() => resolveOptions({ stateDir: '/tmp/x', compaction: 'summarizer' as never }))
+      .toThrow(/compaction/);
+  });
+});
